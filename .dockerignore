@@ -1,0 +1,10 @@
+.git
+.github
+.gitignore
+.golangci.yml
+README.md
+bin
+dist
+coverage.out
+coverage.html
+**/*_test.go
