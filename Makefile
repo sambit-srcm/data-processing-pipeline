@@ -14,6 +14,7 @@ test:
 	go test -race -count=1 -coverprofile=coverage.out ./...
 
 build:
-	go build -o bin/dpp ./...
+	mkdir -p bin
+	go build -o bin/dpp ./cmd/api
 
 ci: tidy lint test build

@@ -20,7 +20,7 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.15
 
   test:
     name: test
@@ -42,4 +42,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go build -o bin/dpp ./...
+      - run: |
+          mkdir -p bin
+          go build -o bin/dpp ./cmd/api

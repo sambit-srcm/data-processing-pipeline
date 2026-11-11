@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,11 @@ func TestHealthAndReady(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	for _, path := range []string{"/health", "/ready"} {
-		resp, err := http.Get(srv.URL + path)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
