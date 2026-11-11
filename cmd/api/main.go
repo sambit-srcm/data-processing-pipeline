@@ -12,11 +12,22 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/api"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/config"
 )
 
 func main() {
-	srv := api.New(os.Getenv("HTTP_ADDR"))
-	slog.Info("http server listening", "addr", srv.Addr)
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("config", "err", err)
+		os.Exit(1)
+	}
+
+	srv := api.New(cfg.HTTPAddr)
+	slog.Info("http server listening",
+		"addr", srv.Addr,
+		"validation_workers", cfg.Workers.Validation,
+		"transform_workers", cfg.Workers.Transformation,
+	)
 
 	errCh := make(chan error, 1)
 	go func() {
