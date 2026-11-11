@@ -5,6 +5,7 @@ import "time"
 // JobStatus is the lifecycle state of a job.
 type JobStatus string
 
+// Job lifecycle statuses.
 const (
 	StatusPending    JobStatus = "pending"
 	StatusRunning    JobStatus = "running"
