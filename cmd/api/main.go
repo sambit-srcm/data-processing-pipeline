@@ -13,6 +13,7 @@ import (
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/api"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/config"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository/memory"
 )
 
@@ -24,7 +25,8 @@ func main() {
 	}
 
 	jobs := memory.NewJobStore()
-	srv := api.New(cfg.HTTPAddr, jobs)
+	runner := pipeline.NewRunner(jobs)
+	srv := api.New(cfg.HTTPAddr, jobs, runner)
 	slog.Info("http server listening",
 		"addr", srv.Addr,
 		"validation_workers", cfg.Workers.Validation,
@@ -48,6 +50,7 @@ func main() {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		runner.Shutdown(shutdownCtx)
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Error("http server shutdown", "err", err)
 			os.Exit(1)
