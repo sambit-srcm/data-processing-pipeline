@@ -4,40 +4,40 @@ import "errors"
 
 // PipelineConfig is the input that starts a job.
 type PipelineConfig struct {
-	Workers Workers
-	Buffers Buffers
-	Sources []SourceConfig
-	Exports []ExportConfig
+	Workers Workers        `json:"workers"`
+	Buffers Buffers        `json:"buffers"`
+	Sources []SourceConfig `json:"sources"`
+	Exports []ExportConfig `json:"exports,omitempty"`
 }
 
 // Workers is how many goroutines each pool runs.
 type Workers struct {
-	Validation     int
-	Transformation int
+	Validation     int `json:"validation"`
+	Transformation int `json:"transformation"`
 }
 
 // Buffers is the capacity of each pipeline channel.
 // Zero is an unbuffered channel.
 type Buffers struct {
-	Records     int
-	Validated   int
-	Transformed int
-	Errors      int
-	Progress    int
+	Records     int `json:"records"`
+	Validated   int `json:"validated"`
+	Transformed int `json:"transformed"`
+	Errors      int `json:"errors"`
+	Progress    int `json:"progress"`
 }
 
 // SourceConfig describes one input.
 type SourceConfig struct {
-	ID   SourceID
-	Kind SourceKind
-	Path string
-	URL  string
+	ID   SourceID   `json:"id"`
+	Kind SourceKind `json:"kind"`
+	Path string     `json:"path,omitempty"`
+	URL  string     `json:"url,omitempty"`
 }
 
 // ExportConfig describes one output.
 type ExportConfig struct {
-	Kind ExportKind
-	Path string
+	Kind ExportKind `json:"kind"`
+	Path string     `json:"path,omitempty"`
 }
 
 // Validate checks counts and that the job has something to read.
