@@ -13,6 +13,7 @@ import (
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/api"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/config"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/repository/memory"
 )
 
 func main() {
@@ -22,7 +23,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := api.New(cfg.HTTPAddr)
+	jobs := memory.NewJobStore()
+	srv := api.New(cfg.HTTPAddr, jobs)
 	slog.Info("http server listening",
 		"addr", srv.Addr,
 		"validation_workers", cfg.Workers.Validation,
