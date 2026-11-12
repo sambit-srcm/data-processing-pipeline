@@ -18,12 +18,12 @@ const (
 
 // Job is one pipeline execution.
 type Job struct {
-	ID         JobID
-	Status     JobStatus
-	Config     PipelineConfig
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
+	ID         JobID          `json:"id"`
+	Status     JobStatus      `json:"status"`
+	Config     PipelineConfig `json:"config"`
+	CreatedAt  time.Time      `json:"created_at"`
+	StartedAt  *time.Time     `json:"started_at,omitempty"`
+	FinishedAt *time.Time     `json:"finished_at,omitempty"`
 }
 
 // CanTransitionTo reports whether next is a legal status change.
