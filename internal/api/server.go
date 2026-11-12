@@ -38,7 +38,7 @@ func Handler(jobs repository.JobRepository) http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines", createPipeline(jobs))
 	mux.HandleFunc("GET /api/v1/pipelines", listPipelines(jobs))
 	mux.HandleFunc("GET /api/v1/pipelines/{id}", getPipeline(jobs))
-	return mux
+	return withMiddleware(mux)
 }
 
 type statusBody struct {
