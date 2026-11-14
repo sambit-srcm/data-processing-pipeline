@@ -11,11 +11,12 @@ import (
 
 // ReadFile loads COVID rows from a CSV file into records.
 func ReadFile(path string, jobID domain.JobID, sourceID domain.SourceID) ([]domain.Record, error) {
-	f, err := os.Open(path)
+	// Path comes from job config supplied by the operator.
+	f, err := os.Open(path) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	r := csv.NewReader(f)
 	rows, err := r.ReadAll()

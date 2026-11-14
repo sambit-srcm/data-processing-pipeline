@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/validation"
 )
 
 // Result is the output of one coordinator run.
@@ -16,10 +17,10 @@ type Result struct {
 	Progress domain.Progress
 }
 
-// Coordinator runs pass-through validation and transformation pools.
+// Coordinator runs validation and transformation pools.
 type Coordinator struct {
-	// Sleep is an optional delay in validation (for cancel tests).
-	Sleep time.Duration
+	Sleep     time.Duration
+	Validator validation.Validator // nil means accept every record
 }
 
 // Run moves records through the stage channels and returns what came out.
@@ -38,10 +39,9 @@ func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, record
 	go collectErrors(ch.errors, &errMu, &errs, &collectors)
 	go collectProgress(ch.progress, &progMu, &prog, &collectors)
 
-	var processed atomic.Int64
-	var valid atomic.Int64
+	var processed, valid, failed atomic.Int64
 
-	validateWG := c.startValidation(ctx, cfg.Workers.Validation, ch, total, startedAt, &processed, &valid)
+	validateWG := c.startValidation(ctx, cfg.Workers.Validation, ch, total, startedAt, &processed, &valid, &failed)
 	transformWG := startForwardPool(ctx, cfg.Workers.Transformation, ch.validated, ch.transformed)
 
 	go func() {
@@ -54,7 +54,7 @@ func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, record
 
 	validateWG.Wait()
 	transformWG.Wait()
-	finishProgress(ctx, ch, &progMu, &prog, &processed, &valid, total, startedAt)
+	finishProgress(ctx, ch, &progMu, &prog, &processed, &valid, &failed, total, startedAt)
 
 	close(ch.errors)
 	close(ch.progress)
@@ -96,14 +96,14 @@ func (c *Coordinator) startValidation(
 	ch *channels,
 	total int64,
 	startedAt time.Time,
-	processed, valid *atomic.Int64,
+	processed, valid, failed *atomic.Int64,
 ) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.validateLoop(ctx, ch, total, startedAt, processed, valid)
+			c.validateLoop(ctx, ch, total, startedAt, processed, valid, failed)
 		}()
 	}
 	go func() {
@@ -118,7 +118,7 @@ func (c *Coordinator) validateLoop(
 	ch *channels,
 	total int64,
 	startedAt time.Time,
-	processed, valid *atomic.Int64,
+	processed, valid, failed *atomic.Int64,
 ) {
 	for {
 		select {
@@ -135,6 +135,32 @@ func (c *Coordinator) validateLoop(
 					return
 				}
 			}
+
+			if c.Validator != nil {
+				var err error
+				rec, err = c.Validator.Validate(ctx, rec)
+				if err != nil {
+					n := processed.Add(1)
+					f := failed.Add(1)
+					_ = send(ctx, ch.errors, domain.PipelineError{
+						JobID:    rec.JobID,
+						SourceID: rec.SourceID,
+						RecordID: rec.ID,
+						Stage:    domain.StageValidation,
+						Message:  err.Error(),
+						At:       time.Now().UTC(),
+					})
+					_ = send(ctx, ch.progress, domain.Progress{
+						Total:     &total,
+						Processed: n,
+						Failed:    f,
+						Valid:     valid.Load(),
+						StartedAt: startedAt,
+					})
+					continue
+				}
+			}
+
 			if !send(ctx, ch.validated, rec) {
 				return
 			}
@@ -144,6 +170,7 @@ func (c *Coordinator) validateLoop(
 				Total:     &total,
 				Processed: n,
 				Valid:     v,
+				Failed:    failed.Load(),
 				StartedAt: startedAt,
 			})
 		}
@@ -197,7 +224,7 @@ func finishProgress(
 	ch *channels,
 	progMu *sync.Mutex,
 	prog *domain.Progress,
-	processed, valid *atomic.Int64,
+	processed, valid, failed *atomic.Int64,
 	total int64,
 	startedAt time.Time,
 ) {
@@ -209,6 +236,7 @@ func finishProgress(
 		Total:      &total,
 		Processed:  processed.Load(),
 		Valid:      valid.Load(),
+		Failed:     failed.Load(),
 		StartedAt:  startedAt,
 		FinishedAt: &finished,
 	}
