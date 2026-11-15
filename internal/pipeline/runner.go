@@ -3,12 +3,17 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/validation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
+	csvsources "github.com/sambit-srcm/data-processing-pipeline/internal/sources/csv"
 )
 
 const defaultSleep = 50 * time.Millisecond
@@ -16,7 +21,7 @@ const defaultSleep = 50 * time.Millisecond
 // Runner starts each job in a goroutine and supports cancellation.
 type Runner struct {
 	jobs repository.JobRepository
-	// Sleep slows the stub coordinator step (also used by cancel tests).
+	// Sleep slows validation (used by cancel tests).
 	Sleep time.Duration
 
 	mu      sync.Mutex
@@ -33,7 +38,7 @@ func NewRunner(jobs repository.JobRepository) *Runner {
 	}
 }
 
-// Start marks the job running and executes the coordinator stub.
+// Start marks the job running and executes the coordinator.
 func (r *Runner) Start(job domain.Job) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -52,20 +57,19 @@ func (r *Runner) Start(job domain.Job) {
 			return
 		}
 
+		recs, err := loadRecords(job)
+		if err != nil {
+			slog.Error("load records", "id", job.ID, "err", err)
+			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			return
+		}
+
 		sleep := r.Sleep
 		if sleep <= 0 {
 			sleep = defaultSleep
 		}
-
-		// Day 4: one stub record until real sources exist (Day 5).
-		recs := []domain.Record{{
-			ID:       "stub-1",
-			JobID:    job.ID,
-			SourceID: "stub",
-			Payload:  domain.COVIDCase{Date: "1970-01-01", Region: "stub"},
-		}}
-		coord := Coordinator{Sleep: sleep}
-		_, err := coord.Run(ctx, job.Config, recs)
+		coord := Coordinator{Sleep: sleep, Validator: validation.COVID{}}
+		result, err := coord.Run(ctx, job.Config, recs)
 
 		status := domain.StatusSucceeded
 		if err != nil {
@@ -75,11 +79,67 @@ func (r *Runner) Start(job domain.Job) {
 				status = domain.StatusFailed
 				slog.Error("job run", "id", job.ID, "err", err)
 			}
+		} else if result.Progress.Failed > 0 && result.Progress.Valid > 0 {
+			status = domain.StatusPartial
+		} else if result.Progress.Valid == 0 && result.Progress.Failed > 0 {
+			status = domain.StatusFailed
 		}
+
 		if _, err := r.jobs.UpdateStatus(context.Background(), job.ID, status); err != nil {
 			slog.Debug("job finish", "id", job.ID, "err", err)
 		}
 	}()
+}
+
+func loadRecords(job domain.Job) ([]domain.Record, error) {
+	var out []domain.Record
+	for _, src := range job.Config.Sources {
+		switch src.Kind {
+		case domain.SourceCSV:
+			path, err := resolveDataPath(src.Path)
+			if err != nil {
+				return nil, err
+			}
+			recs, err := csvsources.ReadFile(path, job.ID, src.ID)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, recs...)
+		default:
+			return nil, errors.New("unsupported source kind: " + string(src.Kind))
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no records loaded")
+	}
+	return out, nil
+}
+
+func resolveDataPath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		candidate := filepath.Join(dir, path)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return "", fmt.Errorf("file not found: %s", path)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("file not found: %s", path)
+		}
+		dir = parent
+	}
 }
 
 // Cancel requests cancellation of a running job.

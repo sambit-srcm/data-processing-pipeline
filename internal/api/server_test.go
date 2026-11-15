@@ -223,7 +223,7 @@ func validConfigJSON() []byte {
 	return []byte(`{
 		"workers": {"validation": 1, "transformation": 1},
 		"buffers": {},
-		"sources": [{"id": "covid", "kind": "csv", "path": "a.csv"}]
+		"sources": [{"id": "covid", "kind": "csv", "path": "samples/input/covid.csv"}]
 	}`)
 }
 
