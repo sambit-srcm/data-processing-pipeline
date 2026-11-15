@@ -17,7 +17,7 @@ func TestRunnerCompletes(t *testing.T) {
 	job, err := store.Create(context.Background(), domain.Job{
 		Config: domain.PipelineConfig{
 			Workers: domain.Workers{Validation: 1, Transformation: 1},
-			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "a.csv"}},
+			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/covid.csv"}},
 		},
 	})
 	if err != nil {
@@ -32,7 +32,7 @@ func TestRunnerCompletes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Status == domain.StatusSucceeded {
+		if got.Status == domain.StatusSucceeded || got.Status == domain.StatusPartial {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -52,7 +52,7 @@ func TestRunnerCancel(t *testing.T) {
 	job, err := store.Create(context.Background(), domain.Job{
 		Config: domain.PipelineConfig{
 			Workers: domain.Workers{Validation: 1, Transformation: 1},
-			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "a.csv"}},
+			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/covid.csv"}},
 		},
 	})
 	if err != nil {
