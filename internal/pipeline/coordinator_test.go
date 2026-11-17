@@ -31,7 +31,7 @@ func fakeRecords(n int) []domain.Record {
 			ID:       domain.RecordID(fmt.Sprintf("r-%d", i)),
 			JobID:    "job-1",
 			SourceID: "fake",
-			Payload:  domain.COVIDCase{Date: "2020-01-01", Region: "X", Cases: int64(i), Deaths: 0},
+			Payload:  domain.HeightWeight{Index: int64(i + 1), Height: 68.0, Weight: 130.0},
 		}
 	}
 	return out

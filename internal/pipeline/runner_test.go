@@ -17,7 +17,7 @@ func TestRunnerCompletes(t *testing.T) {
 	job, err := store.Create(context.Background(), domain.Job{
 		Config: domain.PipelineConfig{
 			Workers: domain.Workers{Validation: 1, Transformation: 1},
-			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/covid.csv"}},
+			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/hw_sample.csv"}},
 		},
 	})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestRunnerCancel(t *testing.T) {
 	job, err := store.Create(context.Background(), domain.Job{
 		Config: domain.PipelineConfig{
 			Workers: domain.Workers{Validation: 1, Transformation: 1},
-			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/covid.csv"}},
+			Sources: []domain.SourceConfig{{ID: "a", Kind: domain.SourceCSV, Path: "samples/input/hw_sample.csv"}},
 		},
 	})
 	if err != nil {
