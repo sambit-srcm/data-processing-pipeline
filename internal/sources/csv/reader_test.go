@@ -7,13 +7,13 @@ import (
 )
 
 func TestReadFile(t *testing.T) {
-	path := findRepoFile(t, "samples", "input", "covid.csv")
-	recs, err := ReadFile(path, "job-1", "covid")
+	path := findRepoFile(t, "samples", "input", "hw_200.csv")
+	recs, err := ReadFile(path, "job-1", "hw")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(recs) != 5 {
-		t.Fatalf("got %d rows", len(recs))
+	if len(recs) != 202 {
+		t.Fatalf("got %d rows, want 202", len(recs))
 	}
 }
 

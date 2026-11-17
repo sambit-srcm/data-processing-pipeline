@@ -46,7 +46,7 @@ func TestAggregationAverage(t *testing.T) {
 func TestPipelineConfigValidate(t *testing.T) {
 	cfg := PipelineConfig{
 		Workers: Workers{Validation: 5, Transformation: 5},
-		Sources: []SourceConfig{{ID: "covid", Kind: SourceCSV, Path: "samples/input/covid.csv"}},
+		Sources: []SourceConfig{{ID: "hw", Kind: SourceCSV, Path: "samples/input/hw_200.csv"}},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
