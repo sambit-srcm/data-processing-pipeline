@@ -14,7 +14,7 @@ func newTestJob() domain.Job {
 	return domain.Job{
 		Config: domain.PipelineConfig{
 			Workers: domain.Workers{Validation: 1, Transformation: 1},
-			Sources: []domain.SourceConfig{{ID: "covid", Kind: domain.SourceCSV, Path: "a.csv"}},
+			Sources: []domain.SourceConfig{{ID: "hw", Kind: domain.SourceCSV, Path: "a.csv"}},
 		},
 	}
 }
