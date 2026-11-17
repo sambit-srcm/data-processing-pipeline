@@ -1,0 +1,5 @@
+[
+  {"id": "bitcoin", "symbol": "btc", "current_price": 67000.5},
+  {"id": "ethereum", "symbol": "eth", "current_price": 3400.25},
+  {"id": "solana", "symbol": "sol", "current_price": 180.1}
+]
