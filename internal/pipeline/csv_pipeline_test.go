@@ -11,20 +11,20 @@ import (
 )
 
 func TestCoordinatorCSVValidation(t *testing.T) {
-	path := findRepoFile(t, "samples", "input", "covid.csv")
-	recs, err := csvsources.ReadFile(path, "job-1", "covid")
+	path := findRepoFile(t, "samples", "input", "hw_200.csv")
+	recs, err := csvsources.ReadFile(path, "job-1", "hw")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := testConfig()
-	c := Coordinator{Validator: validation.COVID{}}
+	c := Coordinator{Validator: validation.HeightWeight{}}
 	res, err := c.Run(context.Background(), cfg, recs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Progress.Valid != 3 {
-		t.Fatalf("valid = %d, want 3", res.Progress.Valid)
+	if res.Progress.Valid != 200 {
+		t.Fatalf("valid = %d, want 200", res.Progress.Valid)
 	}
 	if res.Progress.Failed != 2 {
 		t.Fatalf("failed = %d, want 2", res.Progress.Failed)
@@ -32,8 +32,8 @@ func TestCoordinatorCSVValidation(t *testing.T) {
 	if len(res.Errors) != 2 {
 		t.Fatalf("errors = %d, want 2", len(res.Errors))
 	}
-	if len(res.Records) != 3 {
-		t.Fatalf("records = %d, want 3", len(res.Records))
+	if len(res.Records) != 200 {
+		t.Fatalf("records = %d, want 200", len(res.Records))
 	}
 }
 

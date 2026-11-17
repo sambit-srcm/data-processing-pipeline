@@ -68,7 +68,7 @@ func (r *Runner) Start(job domain.Job) {
 		if sleep <= 0 {
 			sleep = defaultSleep
 		}
-		coord := Coordinator{Sleep: sleep, Validator: validation.COVID{}}
+		coord := Coordinator{Sleep: sleep, Validator: validation.HeightWeight{}}
 		result, err := coord.Run(ctx, job.Config, recs)
 
 		status := domain.StatusSucceeded

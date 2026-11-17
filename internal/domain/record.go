@@ -17,15 +17,14 @@ type Payload interface {
 	sourceKind() SourceKind
 }
 
-// COVIDCase is one row from the COVID-19 CSV source.
-type COVIDCase struct {
-	Date   string
-	Region string
-	Cases  int64
-	Deaths int64
+// HeightWeight is one row from the height/weight CSV source.
+type HeightWeight struct {
+	Index  int64
+	Height float64 // inches
+	Weight float64 // pounds
 }
 
-func (COVIDCase) sourceKind() SourceKind { return SourceCSV }
+func (HeightWeight) sourceKind() SourceKind { return SourceCSV }
 
 // CryptoPrice is one price observation from the JSON API source.
 type CryptoPrice struct {
