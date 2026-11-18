@@ -21,6 +21,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadEnvOverlay(t *testing.T) {
 	t.Setenv("HTTP_ADDR", ":9090")
+	t.Setenv("DATABASE_URL", "postgres://pipeline:pipeline@localhost:5432/pipeline?sslmode=disable")
 	t.Setenv("VALIDATION_WORKERS", "3")
 	t.Setenv("TRANSFORM_WORKERS", "4")
 	t.Setenv("RECORDS_BUFFER", "10")
@@ -31,6 +32,9 @@ func TestLoadEnvOverlay(t *testing.T) {
 	}
 	if cfg.HTTPAddr != ":9090" {
 		t.Fatalf("HTTPAddr = %q", cfg.HTTPAddr)
+	}
+	if cfg.DatabaseURL == "" {
+		t.Fatal("DatabaseURL empty")
 	}
 	if cfg.Workers.Validation != 3 || cfg.Workers.Transformation != 4 {
 		t.Fatalf("workers = %+v", cfg.Workers)

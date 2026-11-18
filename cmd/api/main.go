@@ -14,7 +14,9 @@ import (
 	"github.com/sambit-srcm/data-processing-pipeline/internal/api"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/config"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository/memory"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/repository/postgres"
 )
 
 func main() {
@@ -24,11 +26,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	jobs := memory.NewJobStore()
+	jobs, artifacts, cleanup, err := newStores(cfg)
+	if err != nil {
+		slog.Error("store", "err", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
 	runner := pipeline.NewRunner(jobs)
+	runner.Artifacts = artifacts
 	srv := api.New(cfg.HTTPAddr, jobs, runner)
 	slog.Info("http server listening",
 		"addr", srv.Addr,
+		"postgres", cfg.DatabaseURL != "",
 		"validation_workers", cfg.Workers.Validation,
 		"transform_workers", cfg.Workers.Transformation,
 	)
@@ -56,4 +66,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func newStores(cfg config.Config) (repository.JobRepository, pipeline.ArtifactStore, func(), error) {
+	if cfg.DatabaseURL == "" {
+		return memory.NewJobStore(), nil, func() {}, nil
+	}
+	db, err := postgres.Open(cfg.DatabaseURL)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return postgres.NewJobStore(db), postgres.NewArtifactStore(db), func() { _ = db.Close() }, nil
 }

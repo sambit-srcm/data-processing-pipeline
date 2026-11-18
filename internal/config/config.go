@@ -8,9 +8,10 @@ import (
 
 // Config is process settings loaded at startup.
 type Config struct {
-	HTTPAddr string
-	Workers  Workers
-	Buffers  Buffers
+	HTTPAddr    string
+	DatabaseURL string // empty means in-memory job store
+	Workers     Workers
+	Buffers     Buffers
 }
 
 // Workers is the default size of each worker pool.
@@ -52,6 +53,9 @@ func Load() (Config, error) {
 
 	if v, ok := os.LookupEnv("HTTP_ADDR"); ok {
 		cfg.HTTPAddr = v
+	}
+	if v, ok := os.LookupEnv("DATABASE_URL"); ok {
+		cfg.DatabaseURL = v
 	}
 
 	var err error
