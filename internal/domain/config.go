@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // PipelineConfig is the input that starts a job.
 type PipelineConfig struct {
@@ -50,6 +53,16 @@ func (c PipelineConfig) Validate() error {
 	}
 	if len(c.Sources) == 0 {
 		return errors.New("at least one source is required")
+	}
+	for _, e := range c.Exports {
+		if e.Path == "" {
+			return errors.New("export path is required")
+		}
+		switch e.Kind {
+		case ExportCSV, ExportJSON:
+		default:
+			return fmt.Errorf("unsupported export kind: %s", e.Kind)
+		}
 	}
 	return nil
 }

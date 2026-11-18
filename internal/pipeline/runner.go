@@ -12,6 +12,7 @@ import (
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/aggregation"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/export"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/transformation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/validation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
@@ -89,11 +90,12 @@ func (r *Runner) Start(job domain.Job) {
 			Aggregator:  aggregation.NewMemory(),
 		}
 		result, err := coord.Run(ctx, job.Config, recs)
-		r.finish(ctx, job.ID, sourceFails, result, err)
+		r.finish(ctx, job, sourceFails, result, err)
 	}()
 }
 
-func (r *Runner) finish(ctx context.Context, id domain.JobID, sourceFails int, result Result, runErr error) {
+func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, result Result, runErr error) {
+	id := job.ID
 	status := domain.StatusSucceeded
 	switch {
 	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
@@ -105,6 +107,13 @@ func (r *Runner) finish(ctx context.Context, id domain.JobID, sourceFails int, r
 		status = domain.StatusPartial
 	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
 		status = domain.StatusFailed
+	}
+
+	if status == domain.StatusSucceeded || status == domain.StatusPartial {
+		if err := export.WriteAll(context.Background(), job.Config.Exports, result.Records, result.Aggregations); err != nil {
+			slog.Error("export", "id", id, "err", err)
+			status = domain.StatusFailed
+		}
 	}
 
 	if r.Artifacts != nil {
