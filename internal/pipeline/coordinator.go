@@ -7,20 +7,25 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/aggregation"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/transformation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/validation"
 )
 
 // Result is the output of one coordinator run.
 type Result struct {
-	Records  []domain.Record
-	Errors   []domain.PipelineError
-	Progress domain.Progress
+	Records      []domain.Record
+	Errors       []domain.PipelineError
+	Progress     domain.Progress
+	Aggregations []domain.Aggregation
 }
 
 // Coordinator runs validation and transformation pools.
 type Coordinator struct {
-	Sleep     time.Duration
-	Validator validation.Validator // nil means accept every record
+	Sleep       time.Duration
+	Validator   validation.Validator       // nil means accept every record
+	Transformer transformation.Transformer // nil means pass-through
+	Aggregator  aggregation.Aggregator     // nil means skip aggregation
 }
 
 // Run moves records through the stage channels and returns what came out.
@@ -42,7 +47,7 @@ func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, record
 	var processed, valid, failed atomic.Int64
 
 	validateWG := c.startValidation(ctx, cfg.Workers.Validation, ch, total, startedAt, &processed, &valid, &failed)
-	transformWG := startForwardPool(ctx, cfg.Workers.Transformation, ch.validated, ch.transformed)
+	transformWG := c.startTransform(ctx, cfg.Workers.Transformation, ch)
 
 	go func() {
 		defer close(ch.results)
@@ -60,9 +65,14 @@ func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, record
 	close(ch.progress)
 	collectors.Wait()
 
+	aggs, err := c.aggregate(ctx, out)
+	if err != nil {
+		return Result{}, err
+	}
+
 	errMu.Lock()
 	progMu.Lock()
-	result := Result{Records: out, Errors: errs, Progress: prog}
+	result := Result{Records: out, Errors: errs, Progress: prog, Aggregations: aggs}
 	progMu.Unlock()
 	errMu.Unlock()
 
@@ -177,20 +187,63 @@ func (c *Coordinator) validateLoop(
 	}
 }
 
-func startForwardPool(ctx context.Context, workers int, in <-chan domain.Record, out chan domain.Record) *sync.WaitGroup {
+func (c *Coordinator) startTransform(ctx context.Context, workers int, ch *channels) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			forward(ctx, in, out)
+			c.transformLoop(ctx, ch)
 		}()
 	}
 	go func() {
 		wg.Wait()
-		close(out)
+		close(ch.transformed)
 	}()
 	return &wg
+}
+
+func (c *Coordinator) transformLoop(ctx context.Context, ch *channels) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case rec, ok := <-ch.validated:
+			if !ok {
+				return
+			}
+			if c.Transformer != nil {
+				var err error
+				rec, err = c.Transformer.Transform(ctx, rec)
+				if err != nil {
+					_ = send(ctx, ch.errors, domain.PipelineError{
+						JobID:    rec.JobID,
+						SourceID: rec.SourceID,
+						RecordID: rec.ID,
+						Stage:    domain.StageTransformation,
+						Message:  err.Error(),
+						At:       time.Now().UTC(),
+					})
+					continue
+				}
+			}
+			if !send(ctx, ch.transformed, rec) {
+				return
+			}
+		}
+	}
+}
+
+func (c *Coordinator) aggregate(ctx context.Context, records []domain.Record) ([]domain.Aggregation, error) {
+	if c.Aggregator == nil || ctx.Err() != nil {
+		return nil, nil
+	}
+	for _, rec := range records {
+		if err := c.Aggregator.Add(ctx, rec); err != nil {
+			return nil, err
+		}
+	}
+	return c.Aggregator.Snapshot(ctx)
 }
 
 func feed(ctx context.Context, ch chan<- domain.Record, records []domain.Record) {

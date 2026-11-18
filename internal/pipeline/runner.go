@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/aggregation"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/transformation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/validation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
 	csvsources "github.com/sambit-srcm/data-processing-pipeline/internal/sources/csv"
@@ -72,7 +74,12 @@ func (r *Runner) Start(job domain.Job) {
 		if sleep <= 0 {
 			sleep = defaultSleep
 		}
-		coord := Coordinator{Sleep: sleep, Validator: validation.Router{}}
+		coord := Coordinator{
+			Sleep:       sleep,
+			Validator:   validation.Router{},
+			Transformer: transformation.Normalize{},
+			Aggregator:  aggregation.NewMemory(),
+		}
 		result, err := coord.Run(ctx, job.Config, recs)
 
 		status := domain.StatusSucceeded
