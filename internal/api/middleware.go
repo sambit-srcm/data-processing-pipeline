@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/sambit-srcm/data-processing-pipeline/internal/observability"
 )
 
 type contextKey string
@@ -16,7 +18,17 @@ const requestIDKey contextKey = "request_id"
 const requestIDHeader = "X-Request-ID"
 
 func withMiddleware(next http.Handler) http.Handler {
-	return requestIDMiddleware(recoverMiddleware(requestLogMiddleware(next)))
+	return requestIDMiddleware(recoverMiddleware(metricsMiddleware(requestLogMiddleware(next))))
+}
+
+// metricsMiddleware counts requests and tracks how long they take.
+func metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		observability.ObserveHTTP(r.Method, r.URL.Path, rw.status, time.Since(start))
+	})
 }
 
 func requestIDMiddleware(next http.Handler) http.Handler {

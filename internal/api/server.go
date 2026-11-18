@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/observability"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
 )
 
@@ -42,6 +43,7 @@ func Handler(jobs repository.JobRepository, runner Runner) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", ready)
+	mux.Handle("GET /metrics", observability.Handler())
 	mux.HandleFunc("POST /api/v1/pipelines", createPipeline(jobs, runner))
 	mux.HandleFunc("GET /api/v1/pipelines", listPipelines(jobs))
 	mux.HandleFunc("GET /api/v1/pipelines/{id}", getPipeline(jobs))
@@ -85,6 +87,7 @@ func createPipeline(jobs repository.JobRepository, runner Runner) http.HandlerFu
 			writeJSON(w, http.StatusInternalServerError, ErrorBody{Error: "internal server error"})
 			return
 		}
+		observability.JobCreated()
 		runner.Start(job)
 		writeJSON(w, http.StatusCreated, job)
 	}
