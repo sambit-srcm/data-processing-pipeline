@@ -24,10 +24,15 @@ import (
 
 const defaultSleep = 50 * time.Millisecond
 
-// ArtifactStore saves pipeline outputs after a run.
+// ArtifactStore saves and loads pipeline outputs for a job.
 type ArtifactStore interface {
+	SaveProgress(ctx context.Context, id domain.JobID, p domain.Progress) error
+	GetProgress(ctx context.Context, id domain.JobID) (domain.Progress, error)
 	SaveErrors(ctx context.Context, errs []domain.PipelineError) error
+	ListErrors(ctx context.Context, id domain.JobID) ([]domain.PipelineError, error)
 	SaveAggregations(ctx context.Context, aggs []domain.Aggregation) error
+	ListAggregations(ctx context.Context, id domain.JobID) ([]domain.Aggregation, error)
+	DeleteJob(ctx context.Context, id domain.JobID) error
 }
 
 // Runner starts each job in a goroutine and supports cancellation.
@@ -37,8 +42,10 @@ type Runner struct {
 	Sleep time.Duration
 	// Weather fetches HTTP weather sources. Optional in tests.
 	Weather httpsources.Client
-	// Artifacts optionally persists errors and aggregations.
+	// Artifacts optionally persists progress, errors, and aggregations.
 	Artifacts ArtifactStore
+	// Progress is the live in-memory progress view used by the API.
+	Progress *ProgressHub
 
 	mu      sync.Mutex
 	cancels map[domain.JobID]context.CancelFunc
@@ -48,9 +55,10 @@ type Runner struct {
 // NewRunner returns a job runner.
 func NewRunner(jobs repository.JobRepository) *Runner {
 	return &Runner{
-		jobs:    jobs,
-		Sleep:   defaultSleep,
-		cancels: make(map[domain.JobID]context.CancelFunc),
+		jobs:     jobs,
+		Sleep:    defaultSleep,
+		Progress: NewProgressHub(),
+		cancels:  make(map[domain.JobID]context.CancelFunc),
 	}
 }
 
@@ -94,6 +102,9 @@ func (r *Runner) Start(job domain.Job) {
 			Validator:   validation.Router{},
 			Transformer: transformation.Normalize{},
 			Aggregator:  aggregation.NewMemory(),
+			OnProgress: func(p domain.Progress) {
+				r.Progress.Set(job.ID, p)
+			},
 		}
 		result, err := coord.Run(ctx, job.Config, recs)
 		r.finish(ctx, job, sourceFails, result, err, started)
@@ -122,7 +133,12 @@ func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, re
 		}
 	}
 
+	r.Progress.Set(id, result.Progress)
+
 	if r.Artifacts != nil {
+		if err := r.Artifacts.SaveProgress(context.Background(), id, result.Progress); err != nil {
+			slog.Error("save progress", "id", id, "err", err)
+		}
 		if err := r.Artifacts.SaveErrors(context.Background(), result.Errors); err != nil {
 			slog.Error("save errors", "id", id, "err", err)
 		}
@@ -136,6 +152,16 @@ func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, re
 	if _, err := r.jobs.UpdateStatus(context.Background(), id, status); err != nil {
 		slog.Debug("job finish", "id", id, "err", err)
 	}
+}
+
+// LatestProgress returns live progress when available.
+func (r *Runner) LatestProgress(id domain.JobID) (domain.Progress, bool) {
+	return r.Progress.Get(id)
+}
+
+// ClearProgress drops a job's live progress entry.
+func (r *Runner) ClearProgress(id domain.JobID) {
+	r.Progress.Delete(id)
 }
 
 func (r *Runner) loadRecords(ctx context.Context, job domain.Job) ([]domain.Record, int, error) {

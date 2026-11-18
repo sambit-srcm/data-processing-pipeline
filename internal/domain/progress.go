@@ -5,12 +5,12 @@ import "time"
 // Progress is a point-in-time view of one job.
 // Total is unset when the source cannot know the count ahead of time.
 type Progress struct {
-	Total      *int64
-	Processed  int64
-	Valid      int64
-	Failed     int64
-	StartedAt  time.Time
-	FinishedAt *time.Time
+	Total      *int64     `json:"total,omitempty"`
+	Processed  int64      `json:"processed"`
+	Valid      int64      `json:"valid"`
+	Failed     int64      `json:"failed"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 // Percentage returns how much of Total has been processed.

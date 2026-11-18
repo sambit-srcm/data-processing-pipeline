@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS job_aggregations (
   min DOUBLE PRECISION NOT NULL,
   max DOUBLE PRECISION NOT NULL
 );
+CREATE TABLE IF NOT EXISTS job_progress (
+  job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  total BIGINT,
+  processed BIGINT NOT NULL,
+  valid BIGINT NOT NULL,
+  failed BIGINT NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL,
+  finished_at TIMESTAMPTZ
+);
 CREATE INDEX IF NOT EXISTS job_errors_job_id_idx ON job_errors(job_id);
 CREATE INDEX IF NOT EXISTS job_aggregations_job_id_idx ON job_aggregations(job_id);
 `

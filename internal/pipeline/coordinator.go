@@ -26,6 +26,8 @@ type Coordinator struct {
 	Validator   validation.Validator       // nil means accept every record
 	Transformer transformation.Transformer // nil means pass-through
 	Aggregator  aggregation.Aggregator     // nil means skip aggregation
+	// OnProgress is called whenever a new progress snapshot is collected.
+	OnProgress func(domain.Progress)
 }
 
 // Run moves records through the stage channels and returns what came out.
@@ -42,7 +44,7 @@ func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, record
 	var collectors sync.WaitGroup
 	collectors.Add(2)
 	go collectErrors(ch.errors, &errMu, &errs, &collectors)
-	go collectProgress(ch.progress, &progMu, &prog, &collectors)
+	go collectProgress(ch.progress, &progMu, &prog, c.OnProgress, &collectors)
 
 	var processed, valid, failed atomic.Int64
 
@@ -91,12 +93,15 @@ func collectErrors(ch <-chan domain.PipelineError, mu *sync.Mutex, out *[]domain
 	}
 }
 
-func collectProgress(ch <-chan domain.Progress, mu *sync.Mutex, out *domain.Progress, wg *sync.WaitGroup) {
+func collectProgress(ch <-chan domain.Progress, mu *sync.Mutex, out *domain.Progress, onProgress func(domain.Progress), wg *sync.WaitGroup) {
 	defer wg.Done()
 	for p := range ch {
 		mu.Lock()
 		*out = p
 		mu.Unlock()
+		if onProgress != nil {
+			onProgress(p)
+		}
 	}
 }
 
