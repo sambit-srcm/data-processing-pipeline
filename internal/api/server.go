@@ -11,6 +11,7 @@ import (
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/observability"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/repository"
 )
 
@@ -20,17 +21,19 @@ const defaultAddr = ":8080"
 type Runner interface {
 	Start(job domain.Job)
 	Cancel(id domain.JobID)
+	LatestProgress(id domain.JobID) (domain.Progress, bool)
+	ClearProgress(id domain.JobID)
 }
 
 // New returns an HTTP server bound to addr.
 // An empty addr uses :8080.
-func New(addr string, jobs repository.JobRepository, runner Runner) *http.Server {
+func New(addr string, jobs repository.JobRepository, runner Runner, artifacts pipeline.ArtifactStore) *http.Server {
 	if addr == "" {
 		addr = defaultAddr
 	}
 	return &http.Server{
 		Addr:              addr,
-		Handler:           Handler(jobs, runner),
+		Handler:           Handler(jobs, runner, artifacts),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -39,7 +42,7 @@ func New(addr string, jobs repository.JobRepository, runner Runner) *http.Server
 }
 
 // Handler serves health, readiness, and job routes.
-func Handler(jobs repository.JobRepository, runner Runner) http.Handler {
+func Handler(jobs repository.JobRepository, runner Runner, artifacts pipeline.ArtifactStore) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", ready)
@@ -47,8 +50,11 @@ func Handler(jobs repository.JobRepository, runner Runner) http.Handler {
 	mux.HandleFunc("POST /api/v1/pipelines", createPipeline(jobs, runner))
 	mux.HandleFunc("GET /api/v1/pipelines", listPipelines(jobs))
 	mux.HandleFunc("GET /api/v1/pipelines/{id}", getPipeline(jobs))
+	mux.HandleFunc("GET /api/v1/pipelines/{id}/progress", getProgress(jobs, runner, artifacts))
+	mux.HandleFunc("GET /api/v1/pipelines/{id}/results", getResults(jobs, artifacts))
+	mux.HandleFunc("GET /api/v1/pipelines/{id}/errors", getErrors(jobs, artifacts))
 	mux.HandleFunc("PATCH /api/v1/pipelines/{id}/cancel", cancelPipeline(jobs, runner))
-	mux.HandleFunc("DELETE /api/v1/pipelines/{id}", deletePipeline(jobs, runner))
+	mux.HandleFunc("DELETE /api/v1/pipelines/{id}", deletePipeline(jobs, runner, artifacts))
 	return withMiddleware(mux)
 }
 
@@ -132,7 +138,7 @@ func cancelPipeline(jobs repository.JobRepository, runner Runner) http.HandlerFu
 	}
 }
 
-func deletePipeline(jobs repository.JobRepository, runner Runner) http.HandlerFunc {
+func deletePipeline(jobs repository.JobRepository, runner Runner, artifacts pipeline.ArtifactStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := domain.JobID(r.PathValue("id"))
 		job, err := jobs.Get(r.Context(), id)
@@ -152,6 +158,7 @@ func deletePipeline(jobs repository.JobRepository, runner Runner) http.HandlerFu
 			writeJobError(w, err, id)
 			return
 		}
+		deleteJobArtifacts(r.Context(), artifacts, runner, id)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
