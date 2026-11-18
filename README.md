@@ -19,6 +19,22 @@ Go service for the data processing pipeline.
 | `make build` | Build `bin/dpp` |
 | `make ci` | tidy, lint, test, and build |
 
+## Docker (API + Postgres + Prometheus + Grafana)
+
+```bash
+docker compose up --build
+```
+
+| Service | URL |
+| --- | --- |
+| API | http://localhost:8080 |
+| Metrics | http://localhost:8080/metrics |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 (admin / admin) |
+
+Grafana opens the **DPP Overview** dashboard on login (HTTP rate, latency, jobs by status).  
+If you land on the empty home page: **Dashboards → DPP Overview**, or open http://localhost:3000/d/dpp-overview/dpp-overview
+
 ## CI
 
 - `.github/workflows/ci.yml` lints, tests, and builds on push and pull request.

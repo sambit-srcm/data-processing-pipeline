@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
+	"github.com/sambit-srcm/data-processing-pipeline/internal/observability"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/aggregation"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/export"
 	"github.com/sambit-srcm/data-processing-pipeline/internal/pipeline/transformation"
@@ -67,8 +68,12 @@ func (r *Runner) Start(job domain.Job) {
 		defer r.clearCancel(job.ID)
 		defer cancel()
 
+		started := time.Now()
+		observability.JobStarted()
+
 		if _, err := r.jobs.UpdateStatus(ctx, job.ID, domain.StatusRunning); err != nil {
 			slog.Error("job start", "id", job.ID, "err", err)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
 			return
 		}
 
@@ -76,6 +81,7 @@ func (r *Runner) Start(job domain.Job) {
 		if err != nil {
 			slog.Error("load records", "id", job.ID, "err", err)
 			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
 			return
 		}
 
@@ -90,11 +96,11 @@ func (r *Runner) Start(job domain.Job) {
 			Aggregator:  aggregation.NewMemory(),
 		}
 		result, err := coord.Run(ctx, job.Config, recs)
-		r.finish(ctx, job, sourceFails, result, err)
+		r.finish(ctx, job, sourceFails, result, err, started)
 	}()
 }
 
-func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, result Result, runErr error) {
+func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, result Result, runErr error, started time.Time) {
 	id := job.ID
 	status := domain.StatusSucceeded
 	switch {
@@ -124,6 +130,8 @@ func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, re
 			slog.Error("save aggregations", "id", id, "err", err)
 		}
 	}
+
+	observability.JobFinished(string(status), time.Since(started))
 
 	if _, err := r.jobs.UpdateStatus(context.Background(), id, status); err != nil {
 		slog.Debug("job finish", "id", id, "err", err)

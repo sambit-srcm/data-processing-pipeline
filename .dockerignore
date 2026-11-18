@@ -1,10 +1,9 @@
 .git
-.github
-.gitignore
-.golangci.yml
-README.md
+.bin
 bin
-dist
 coverage.out
-coverage.html
-**/*_test.go
+*.md
+.env
+.idea
+.vscode
+**/agent-transcripts
