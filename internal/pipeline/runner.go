@@ -22,6 +22,12 @@ import (
 
 const defaultSleep = 50 * time.Millisecond
 
+// ArtifactStore saves pipeline outputs after a run.
+type ArtifactStore interface {
+	SaveErrors(ctx context.Context, errs []domain.PipelineError) error
+	SaveAggregations(ctx context.Context, aggs []domain.Aggregation) error
+}
+
 // Runner starts each job in a goroutine and supports cancellation.
 type Runner struct {
 	jobs repository.JobRepository
@@ -29,6 +35,8 @@ type Runner struct {
 	Sleep time.Duration
 	// Weather fetches HTTP weather sources. Optional in tests.
 	Weather httpsources.Client
+	// Artifacts optionally persists errors and aggregations.
+	Artifacts ArtifactStore
 
 	mu      sync.Mutex
 	cancels map[domain.JobID]context.CancelFunc
@@ -81,25 +89,36 @@ func (r *Runner) Start(job domain.Job) {
 			Aggregator:  aggregation.NewMemory(),
 		}
 		result, err := coord.Run(ctx, job.Config, recs)
-
-		status := domain.StatusSucceeded
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				status = domain.StatusCancelled
-			} else {
-				status = domain.StatusFailed
-				slog.Error("job run", "id", job.ID, "err", err)
-			}
-		} else if sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0) {
-			status = domain.StatusPartial
-		} else if result.Progress.Valid == 0 && result.Progress.Failed > 0 {
-			status = domain.StatusFailed
-		}
-
-		if _, err := r.jobs.UpdateStatus(context.Background(), job.ID, status); err != nil {
-			slog.Debug("job finish", "id", job.ID, "err", err)
-		}
+		r.finish(ctx, job.ID, sourceFails, result, err)
 	}()
+}
+
+func (r *Runner) finish(ctx context.Context, id domain.JobID, sourceFails int, result Result, runErr error) {
+	status := domain.StatusSucceeded
+	switch {
+	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
+		status = domain.StatusCancelled
+	case runErr != nil:
+		status = domain.StatusFailed
+		slog.Error("job run", "id", id, "err", runErr)
+	case sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0):
+		status = domain.StatusPartial
+	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
+		status = domain.StatusFailed
+	}
+
+	if r.Artifacts != nil {
+		if err := r.Artifacts.SaveErrors(context.Background(), result.Errors); err != nil {
+			slog.Error("save errors", "id", id, "err", err)
+		}
+		if err := r.Artifacts.SaveAggregations(context.Background(), result.Aggregations); err != nil {
+			slog.Error("save aggregations", "id", id, "err", err)
+		}
+	}
+
+	if _, err := r.jobs.UpdateStatus(context.Background(), id, status); err != nil {
+		slog.Debug("job finish", "id", id, "err", err)
+	}
 }
 
 func (r *Runner) loadRecords(ctx context.Context, job domain.Job) ([]domain.Record, int, error) {
