@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestReadFile(t *testing.T) {
+func TestReadFileJSONArray(t *testing.T) {
 	path := findRepoFile(t, "samples", "input", "coingecko.json")
 	recs, err := ReadFile(path, "job-1", "crypto")
 	if err != nil {
@@ -14,6 +14,17 @@ func TestReadFile(t *testing.T) {
 	}
 	if len(recs) != 3 {
 		t.Fatalf("got %d", len(recs))
+	}
+}
+
+func TestReadFileJSONL(t *testing.T) {
+	path := findRepoFile(t, "samples", "input", "coingecko.jsonl")
+	recs, err := ReadFile(path, "job-1", "crypto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) < 100 {
+		t.Fatalf("got %d rows, want a large scraper dump", len(recs))
 	}
 }
 
