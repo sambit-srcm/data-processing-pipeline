@@ -1,0 +1,658 @@
+openapi: 3.0.3
+info:
+  title: Data Processing Pipeline API
+  version: 1.0.0
+  description: |
+    Concurrent Go data-processing pipeline. Submit a job specification with sources,
+    transformations, aggregations, exports, and worker/buffer settings. Track progress,
+    results, and stage errors over HTTP.
+
+    Responses include `X-Request-ID` (echoed from the request or generated).
+servers:
+  - url: http://localhost:8080
+    description: Local / Docker Compose API
+tags:
+  - name: system
+    description: Health and metrics
+  - name: pipelines
+    description: Pipeline job lifecycle and reports
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Process is up
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusBody"
+              example:
+                status: ok
+
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness check
+      operationId: getReady
+      responses:
+        "200":
+          description: Process is ready to accept traffic
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusBody"
+              example:
+                status: ready
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics
+      operationId: getMetrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/pipelines:
+    get:
+      tags: [pipelines]
+      summary: List pipeline jobs
+      operationId: listPipelines
+      responses:
+        "200":
+          description: All known jobs
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Job"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [pipelines]
+      summary: Create and start a pipeline job
+      description: |
+        Accepts a full job specification. Missing `transformations` default to
+        `[{ "kind": "normalize" }]`. Missing `aggregations` default to
+        `[{ "kind": "stats", "group_by": "auto", "value_field": "auto" }]`.
+      operationId: createPipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PipelineConfig"
+            examples:
+              multiSourceGlobalDaily:
+                summary: CSV + JSON + HTTP with stats and global daily report
+                value:
+                  workers:
+                    validation: 2
+                    transformation: 2
+                  buffers:
+                    records: 32
+                    validated: 32
+                    transformed: 32
+                    errors: 32
+                    progress: 32
+                  sources:
+                    - id: hw
+                      kind: csv
+                      path: samples/input/hw_sample.csv
+                    - id: crypto
+                      kind: json
+                      path: samples/input/coingecko.json
+                    - id: weather
+                      kind: http
+                      url: https://api.open-meteo.com/v1/forecast?latitude=20&longitude=85&current=temperature_2m
+                  transformations:
+                    - kind: normalize
+                  aggregations:
+                    - kind: stats
+                      group_by: auto
+                      value_field: auto
+                    - kind: global_daily
+                  exports:
+                    - kind: json
+                      path: samples/output/report.json
+                    - kind: csv
+                      path: samples/output/report.csv
+      responses:
+        "201":
+          description: Job created and started
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/pipelines/{id}:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [pipelines]
+      summary: Get a pipeline job
+      operationId: getPipeline
+      responses:
+        "200":
+          description: Job found
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      tags: [pipelines]
+      summary: Delete a pipeline job
+      description: Cancels a running job first, then deletes the job and its artifacts.
+      operationId: deletePipeline
+      responses:
+        "204":
+          description: Job deleted
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/pipelines/{id}/progress:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [pipelines]
+      summary: Get job progress
+      description: Prefers live in-memory progress; falls back to persisted progress.
+      operationId: getPipelineProgress
+      responses:
+        "200":
+          description: Progress snapshot
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgressView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/pipelines/{id}/results:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [pipelines]
+      summary: Get job results
+      description: |
+        Returns aggregations, optional `global_daily` reports (when that aggregation
+        kind was configured), configured export targets, and valid record count.
+      operationId: getPipelineResults
+      responses:
+        "200":
+          description: Results snapshot
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultsView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/pipelines/{id}/errors:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    get:
+      tags: [pipelines]
+      summary: List pipeline errors
+      description: Centralized errors from ingestion, validation, transformation, and aggregation stages.
+      operationId: getPipelineErrors
+      responses:
+        "200":
+          description: Error list for the job
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorsView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/pipelines/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/JobID"
+    patch:
+      tags: [pipelines]
+      summary: Cancel a pipeline job
+      description: |
+        Pending jobs become `cancelled` immediately. Running jobs move to
+        `cancelling`, workers stop via context cancel, then status becomes `cancelled`.
+      operationId: cancelPipeline
+      responses:
+        "200":
+          description: Job cancelled (or still cancelling if wait timed out)
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  headers:
+    RequestID:
+      description: Correlation id for the request
+      schema:
+        type: string
+
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      description: Pipeline job id
+      schema:
+        type: string
+        example: job-1
+
+  responses:
+    BadRequest:
+      description: Invalid JSON or job specification
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    NotFound:
+      description: Job not found
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: job not found
+    Conflict:
+      description: Invalid job status transition
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: invalid job status transition
+    InternalError:
+      description: Unexpected server error
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: internal server error
+
+  schemas:
+    StatusBody:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    JobStatus:
+      type: string
+      enum:
+        - pending
+        - running
+        - cancelling
+        - cancelled
+        - succeeded
+        - failed
+        - partial
+
+    Job:
+      type: object
+      required: [id, status, config, created_at]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        config:
+          $ref: "#/components/schemas/PipelineConfig"
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+
+    PipelineConfig:
+      type: object
+      required: [workers, sources]
+      properties:
+        workers:
+          $ref: "#/components/schemas/Workers"
+        buffers:
+          $ref: "#/components/schemas/Buffers"
+        sources:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/SourceConfig"
+        transformations:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransformConfig"
+        aggregations:
+          type: array
+          items:
+            $ref: "#/components/schemas/AggregationConfig"
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportConfig"
+
+    Workers:
+      type: object
+      required: [validation, transformation]
+      properties:
+        validation:
+          type: integer
+          minimum: 1
+        transformation:
+          type: integer
+          minimum: 1
+
+    Buffers:
+      type: object
+      description: Channel capacities; zero means unbuffered.
+      properties:
+        records:
+          type: integer
+          minimum: 0
+        validated:
+          type: integer
+          minimum: 0
+        transformed:
+          type: integer
+          minimum: 0
+        errors:
+          type: integer
+          minimum: 0
+        progress:
+          type: integer
+          minimum: 0
+
+    SourceConfig:
+      type: object
+      required: [id, kind]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [csv, json, http]
+        path:
+          type: string
+          description: Required for csv and json sources
+        url:
+          type: string
+          format: uri
+          description: Required for http sources (e.g. Open-Meteo)
+
+    TransformConfig:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [normalize]
+
+    AggregationConfig:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [stats, global_daily]
+          description: |
+            `stats` — per-group count/sum/min/max.
+            `global_daily` — cross-source report for the pipeline run day.
+        group_by:
+          type: string
+          enum: [auto, source, symbol]
+          description: Used by `stats` only
+        value_field:
+          type: string
+          enum: [auto, weight, height, price, temp_c]
+          description: Used by `stats` only
+
+    ExportConfig:
+      type: object
+      required: [kind, path]
+      properties:
+        kind:
+          type: string
+          enum: [csv, json]
+        path:
+          type: string
+
+    ProgressView:
+      type: object
+      required: [job_id, status, processed, valid, failed, records_per_sec]
+      properties:
+        job_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        total:
+          type: integer
+          format: int64
+          nullable: true
+        processed:
+          type: integer
+          format: int64
+        valid:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        pending:
+          type: integer
+          format: int64
+          nullable: true
+        percent_complete:
+          type: number
+          format: double
+          nullable: true
+        records_per_sec:
+          type: number
+          format: double
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+
+    ResultsView:
+      type: object
+      required: [job_id, status, record_count, aggregations, exports]
+      properties:
+        job_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        record_count:
+          type: integer
+          format: int64
+        aggregations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Aggregation"
+        global_daily:
+          type: array
+          items:
+            $ref: "#/components/schemas/GlobalDailyReport"
+        exports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportConfig"
+
+    ErrorsView:
+      type: object
+      required: [job_id, errors]
+      properties:
+        job_id:
+          type: string
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/PipelineError"
+
+    Aggregation:
+      type: object
+      properties:
+        job_id:
+          type: string
+        source_id:
+          type: string
+        group_key:
+          type: string
+        count:
+          type: integer
+          format: int64
+        sum:
+          type: number
+          format: double
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+
+    GlobalDailyReport:
+      type: object
+      properties:
+        job_id:
+          type: string
+        date:
+          type: string
+          description: UTC calendar day of the pipeline run (YYYY-MM-DD)
+          example: "2026-11-19"
+        total_records:
+          type: integer
+          format: int64
+        kinds:
+          type: array
+          items:
+            $ref: "#/components/schemas/GlobalDailyKindStat"
+
+    GlobalDailyKindStat:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [csv, json, http]
+        count:
+          type: integer
+          format: int64
+        sum:
+          type: number
+          format: double
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+
+    PipelineError:
+      type: object
+      required: [job_id, message, at]
+      properties:
+        job_id:
+          type: string
+        source_id:
+          type: string
+        record_id:
+          type: string
+        stage:
+          type: string
+          enum: [ingestion, validation, transformation, aggregation, export]
+        message:
+          type: string
+        at:
+          type: string
+          format: date-time

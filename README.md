@@ -8,6 +8,10 @@ Go service for the data processing pipeline.
 - golangci-lint v2.13 (`brew install golangci-lint` or the [install script](https://golangci-lint.run/docs/welcome/install/))
 - `goimports` (`go install golang.org/x/tools/cmd/goimports@latest`)
 
+## API
+
+OpenAPI 3 spec: [`docs/openapi.yaml`](docs/openapi.yaml)
+
 ## Commands
 
 | Command | What it does |
