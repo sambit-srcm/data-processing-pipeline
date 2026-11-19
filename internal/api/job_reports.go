@@ -79,6 +79,7 @@ func getResults(jobs repository.JobRepository, artifacts pipeline.ArtifactStore)
 			Status:       job.Status,
 			RecordCount:  recordCount,
 			Aggregations: aggs,
+			GlobalDaily:  domain.GlobalDailyFromAggregations(aggs),
 			Exports:      exports,
 		})
 	}

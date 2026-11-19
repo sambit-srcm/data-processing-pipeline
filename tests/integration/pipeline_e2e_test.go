@@ -94,6 +94,10 @@ func TestE2E_MultiSourceCSVJSONHTTP(t *testing.T) {
 			{ID: "crypto", Kind: domain.SourceJSON, Path: samplePath(t, "coingecko.json")},
 			{ID: "weather", Kind: domain.SourceHTTP, URL: env.WeatherURL},
 		},
+		Aggregations: []domain.AggregationConfig{
+			{Kind: domain.AggregationStats, GroupBy: "auto", ValueField: "auto"},
+			{Kind: domain.AggregationGlobalDaily},
+		},
 	})
 	done := waitJob(t, env, job.ID, domain.StatusSucceeded, domain.StatusPartial)
 
@@ -103,6 +107,17 @@ func TestE2E_MultiSourceCSVJSONHTTP(t *testing.T) {
 	}
 	if progress.Valid < 3 {
 		t.Fatalf("expected multi-source valid records, got %d", progress.Valid)
+	}
+
+	var results api.ResultsView
+	if status := doJSON(t, http.MethodGet, env.URL+"/api/v1/pipelines/"+string(done.ID)+"/results", nil, &results); status != http.StatusOK {
+		t.Fatalf("results status=%d", status)
+	}
+	if len(results.GlobalDaily) == 0 || results.GlobalDaily[0].TotalRecords == 0 {
+		t.Fatalf("expected global_daily report, got %+v", results.GlobalDaily)
+	}
+	if len(results.GlobalDaily[0].Kinds) < 2 {
+		t.Fatalf("expected multi-kind global daily, got %+v", results.GlobalDaily[0].Kinds)
 	}
 }
 

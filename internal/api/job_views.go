@@ -23,11 +23,12 @@ type ProgressView struct {
 
 // ResultsView is the API response for GET .../results.
 type ResultsView struct {
-	JobID        domain.JobID          `json:"job_id"`
-	Status       domain.JobStatus      `json:"status"`
-	RecordCount  int64                 `json:"record_count"`
-	Aggregations []domain.Aggregation  `json:"aggregations"`
-	Exports      []domain.ExportConfig `json:"exports"`
+	JobID        domain.JobID               `json:"job_id"`
+	Status       domain.JobStatus           `json:"status"`
+	RecordCount  int64                      `json:"record_count"`
+	Aggregations []domain.Aggregation       `json:"aggregations"`
+	GlobalDaily  []domain.GlobalDailyReport `json:"global_daily,omitempty"`
+	Exports      []domain.ExportConfig      `json:"exports"`
 }
 
 // ErrorsView is the API response for GET .../errors.

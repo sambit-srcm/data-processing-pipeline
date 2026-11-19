@@ -28,7 +28,7 @@ func TestWriteCSVAndJSON(t *testing.T) {
 	err := WriteAll(context.Background(), []domain.ExportConfig{
 		{Kind: domain.ExportCSV, Path: csvPath},
 		{Kind: domain.ExportJSON, Path: jsonPath},
-	}, recs, aggs)
+	}, recs, aggs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

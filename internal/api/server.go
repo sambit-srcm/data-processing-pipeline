@@ -86,6 +86,7 @@ func createPipeline(jobs repository.JobRepository, runner Runner) http.HandlerFu
 			writeJSON(w, http.StatusBadRequest, ErrorBody{Error: err.Error()})
 			return
 		}
+		cfg.ApplyDefaults()
 
 		job, err := jobs.Create(r.Context(), domain.Job{Config: cfg})
 		if err != nil {
