@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
@@ -85,9 +86,8 @@ func (r *Runner) Start(job domain.Job) {
 			return
 		}
 
-		recs, sourceFails, err := r.loadRecords(ctx, job)
-		if err != nil {
-			slog.Error("load records", "id", job.ID, "err", err)
+		if len(job.Config.Sources) == 0 {
+			slog.Error("load records", "id", job.ID, "err", "no sources")
 			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
 			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
 			return
@@ -97,17 +97,39 @@ func (r *Runner) Start(job domain.Job) {
 		if sleep <= 0 {
 			sleep = defaultSleep
 		}
+		transformer, err := transformation.FromConfig(job.Config.Transformations)
+		if err != nil {
+			slog.Error("transform config", "id", job.ID, "err", err)
+			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
+			return
+		}
+		aggregator, err := aggregation.FromConfigs(job.Config.Aggregations...)
+		if err != nil {
+			slog.Error("aggregation config", "id", job.ID, "err", err)
+			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
+			return
+		}
 		coord := Coordinator{
 			Sleep:       sleep,
 			Validator:   validation.Router{},
-			Transformer: transformation.Normalize{},
-			Aggregator:  aggregation.NewMemory(),
+			Transformer: transformer,
+			Aggregator:  aggregator,
 			OnProgress: func(p domain.Progress) {
 				r.Progress.Set(job.ID, p)
 			},
 		}
-		result, err := coord.Run(ctx, job.Config, recs)
-		r.finish(ctx, job, sourceFails, result, err, started)
+
+		var sourceFails atomic.Int64
+		result, err := coord.RunIngest(ctx, job.Config, func(ctx context.Context, recordsCh chan<- domain.Record, errorsCh chan<- domain.PipelineError) {
+			r.ingestSources(ctx, job, recordsCh, errorsCh, &sourceFails)
+		})
+		fails := int(sourceFails.Load())
+		if err == nil && result.Progress.Processed == 0 && result.Progress.Failed == 0 && fails > 0 {
+			err = errors.New("no records loaded")
+		}
+		r.finish(ctx, job, fails, result, err, started)
 	}()
 }
 
@@ -126,11 +148,15 @@ func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, re
 		status = domain.StatusFailed
 	}
 
+	// Export runs in its own goroutine (assignment: one export worker).
+	var exportErr error
+	var exportWG sync.WaitGroup
 	if status == domain.StatusSucceeded || status == domain.StatusPartial {
-		if err := export.WriteAll(context.Background(), job.Config.Exports, result.Records, result.Aggregations); err != nil {
-			slog.Error("export", "id", id, "err", err)
-			status = domain.StatusFailed
-		}
+		exportWG.Add(1)
+		go func() {
+			defer exportWG.Done()
+			exportErr = export.WriteAll(context.Background(), job.Config.Exports, result.Records, result.Aggregations, result.GlobalDaily)
+		}()
 	}
 
 	r.Progress.Set(id, result.Progress)
@@ -145,6 +171,12 @@ func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, re
 		if err := r.Artifacts.SaveAggregations(context.Background(), result.Aggregations); err != nil {
 			slog.Error("save aggregations", "id", id, "err", err)
 		}
+	}
+
+	exportWG.Wait()
+	if exportErr != nil {
+		slog.Error("export", "id", id, "err", exportErr)
+		status = domain.StatusFailed
 	}
 
 	observability.JobFinished(string(status), time.Since(started))
@@ -164,22 +196,48 @@ func (r *Runner) ClearProgress(id domain.JobID) {
 	r.Progress.Delete(id)
 }
 
-func (r *Runner) loadRecords(ctx context.Context, job domain.Job) ([]domain.Record, int, error) {
-	var out []domain.Record
-	fails := 0
-	for _, src := range job.Config.Sources {
-		recs, err := r.loadOne(ctx, job, src)
-		if err != nil {
-			slog.Error("source failed", "job", job.ID, "source", src.ID, "err", err)
-			fails++
-			continue
-		}
-		out = append(out, recs...)
+// ingestSources loads each source in its own goroutine and fans records into recordsCh.
+// Source failures are reported on errorsCh as StageIngestion pipeline errors.
+func (r *Runner) ingestSources(ctx context.Context, job domain.Job, recordsCh chan<- domain.Record, errorsCh chan<- domain.PipelineError, sourceFails *atomic.Int64) {
+	sources := job.Config.Sources
+	var wg sync.WaitGroup
+	for _, src := range sources {
+		src := src
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ctx.Err(); err != nil {
+				sourceFails.Add(1)
+				_ = send(ctx, errorsCh, domain.PipelineError{
+					JobID:    job.ID,
+					SourceID: src.ID,
+					Stage:    domain.StageIngestion,
+					Message:  err.Error(),
+					At:       time.Now().UTC(),
+				})
+				return
+			}
+			recs, err := r.loadOne(ctx, job, src)
+			if err != nil {
+				slog.Error("source failed", "job", job.ID, "source", src.ID, "err", err)
+				sourceFails.Add(1)
+				_ = send(ctx, errorsCh, domain.PipelineError{
+					JobID:    job.ID,
+					SourceID: src.ID,
+					Stage:    domain.StageIngestion,
+					Message:  err.Error(),
+					At:       time.Now().UTC(),
+				})
+				return
+			}
+			for _, rec := range recs {
+				if !send(ctx, recordsCh, rec) {
+					return
+				}
+			}
+		}()
 	}
-	if len(out) == 0 {
-		return nil, fails, errors.New("no records loaded")
-	}
-	return out, fails, nil
+	wg.Wait()
 }
 
 func (r *Runner) loadOne(ctx context.Context, job domain.Job, src domain.SourceConfig) ([]domain.Record, error) {

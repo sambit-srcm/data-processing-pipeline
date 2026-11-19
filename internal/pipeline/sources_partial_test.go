@@ -20,9 +20,11 @@ func TestRunnerPartialWhenOneSourceFails(t *testing.T) {
 	t.Cleanup(badWeather.Close)
 
 	store := memory.NewJobStore()
+	arts := memory.NewArtifactStore()
 	runner := NewRunner(store)
 	runner.Sleep = 0
 	runner.Weather = httpsources.Client{HTTP: badWeather.Client()}
+	runner.Artifacts = arts
 
 	job, err := store.Create(context.Background(), domain.Job{
 		Config: domain.PipelineConfig{
@@ -41,6 +43,21 @@ func TestRunnerPartialWhenOneSourceFails(t *testing.T) {
 	runner.Start(job)
 	waitJobStatus(t, store, job.ID, domain.StatusPartial)
 	runner.Shutdown(context.Background())
+
+	errs, err := arts.ListErrors(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range errs {
+		if e.Stage == domain.StageIngestion && e.SourceID == "weather" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected ingestion error for weather source, got %+v", errs)
+	}
 }
 
 func waitJobStatus(t *testing.T, store repository.JobRepository, id domain.JobID, want domain.JobStatus) {
