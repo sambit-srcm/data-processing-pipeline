@@ -19,3 +19,20 @@ func (a Aggregation) Average() (float64, bool) {
 	}
 	return a.Sum / float64(a.Count), true
 }
+
+// GlobalDailyReport combines all source kinds for one calendar day (UTC).
+type GlobalDailyReport struct {
+	JobID        JobID                `json:"job_id"`
+	Date         string               `json:"date"`
+	TotalRecords int64                `json:"total_records"`
+	Kinds        []GlobalDailyKindStat `json:"kinds"`
+}
+
+// GlobalDailyKindStat is one source-kind rollup inside a global daily report.
+type GlobalDailyKindStat struct {
+	Kind  SourceKind `json:"kind"`
+	Count int64      `json:"count"`
+	Sum   float64    `json:"sum"`
+	Min   float64    `json:"min"`
+	Max   float64    `json:"max"`
+}
