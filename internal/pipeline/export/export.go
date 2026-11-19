@@ -26,7 +26,7 @@ func writeOne(cfg domain.ExportConfig, records []domain.Record, aggs []domain.Ag
 	if cfg.Path == "" {
 		return fmt.Errorf("export path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o750); err != nil {
 		return err
 	}
 	switch cfg.Kind {

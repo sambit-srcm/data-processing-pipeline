@@ -33,7 +33,7 @@ func TestWriteCSVAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f, err := os.Open(csvPath)
+	f, err := os.Open(csvPath) //nolint:gosec // test path under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestWriteCSVAndJSON(t *testing.T) {
 		t.Fatalf("csv rows = %d", len(rows))
 	}
 
-	aggRows, err := os.ReadFile(filepath.Join(dir, "out.aggs.csv"))
+	aggRows, err := os.ReadFile(filepath.Join(dir, "out.aggs.csv")) //nolint:gosec // test path under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestWriteCSVAndJSON(t *testing.T) {
 		t.Fatal("empty aggs csv")
 	}
 
-	raw, err := os.ReadFile(jsonPath)
+	raw, err := os.ReadFile(jsonPath) //nolint:gosec // test path under t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}

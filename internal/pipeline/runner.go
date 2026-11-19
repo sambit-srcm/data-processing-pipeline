@@ -135,54 +135,65 @@ func (r *Runner) Start(job domain.Job) {
 
 func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, result Result, runErr error, started time.Time) {
 	id := job.ID
-	status := domain.StatusSucceeded
-	switch {
-	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
-		status = domain.StatusCancelled
-	case runErr != nil:
-		status = domain.StatusFailed
-		slog.Error("job run", "id", id, "err", runErr)
-	case sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0):
-		status = domain.StatusPartial
-	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
-		status = domain.StatusFailed
-	}
+	status := finishStatus(ctx, id, sourceFails, result, runErr)
+	persistCtx := context.WithoutCancel(ctx)
 
-	// Export runs in its own goroutine (assignment: one export worker).
-	var exportErr error
-	var exportWG sync.WaitGroup
-	if status == domain.StatusSucceeded || status == domain.StatusPartial {
-		exportWG.Add(1)
-		go func() {
-			defer exportWG.Done()
-			exportErr = export.WriteAll(context.Background(), job.Config.Exports, result.Records, result.Aggregations, result.GlobalDaily)
-		}()
-	}
-
+	exportDone := r.startExport(persistCtx, status, job, result)
 	r.Progress.Set(id, result.Progress)
+	r.saveArtifacts(persistCtx, id, result)
 
-	if r.Artifacts != nil {
-		if err := r.Artifacts.SaveProgress(context.Background(), id, result.Progress); err != nil {
-			slog.Error("save progress", "id", id, "err", err)
-		}
-		if err := r.Artifacts.SaveErrors(context.Background(), result.Errors); err != nil {
-			slog.Error("save errors", "id", id, "err", err)
-		}
-		if err := r.Artifacts.SaveAggregations(context.Background(), result.Aggregations); err != nil {
-			slog.Error("save aggregations", "id", id, "err", err)
-		}
-	}
-
-	exportWG.Wait()
-	if exportErr != nil {
-		slog.Error("export", "id", id, "err", exportErr)
+	if err := <-exportDone; err != nil {
+		slog.Error("export", "id", id, "err", err)
 		status = domain.StatusFailed
 	}
 
 	observability.JobFinished(string(status), time.Since(started))
-
-	if _, err := r.jobs.UpdateStatus(context.Background(), id, status); err != nil {
+	if _, err := r.jobs.UpdateStatus(persistCtx, id, status); err != nil {
 		slog.Debug("job finish", "id", id, "err", err)
+	}
+}
+
+func finishStatus(ctx context.Context, id domain.JobID, sourceFails int, result Result, runErr error) domain.JobStatus {
+	switch {
+	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
+		return domain.StatusCancelled
+	case runErr != nil:
+		slog.Error("job run", "id", id, "err", runErr)
+		return domain.StatusFailed
+	case sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0):
+		return domain.StatusPartial
+	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
+		return domain.StatusFailed
+	default:
+		return domain.StatusSucceeded
+	}
+}
+
+func (r *Runner) startExport(ctx context.Context, status domain.JobStatus, job domain.Job, result Result) <-chan error {
+	done := make(chan error, 1)
+	if status != domain.StatusSucceeded && status != domain.StatusPartial {
+		close(done)
+		return done
+	}
+	go func() {
+		done <- export.WriteAll(ctx, job.Config.Exports, result.Records, result.Aggregations, result.GlobalDaily)
+		close(done)
+	}()
+	return done
+}
+
+func (r *Runner) saveArtifacts(ctx context.Context, id domain.JobID, result Result) {
+	if r.Artifacts == nil {
+		return
+	}
+	if err := r.Artifacts.SaveProgress(ctx, id, result.Progress); err != nil {
+		slog.Error("save progress", "id", id, "err", err)
+	}
+	if err := r.Artifacts.SaveErrors(ctx, result.Errors); err != nil {
+		slog.Error("save errors", "id", id, "err", err)
+	}
+	if err := r.Artifacts.SaveAggregations(ctx, result.Aggregations); err != nil {
+		slog.Error("save aggregations", "id", id, "err", err)
 	}
 }
 

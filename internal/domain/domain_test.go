@@ -59,8 +59,8 @@ func TestPipelineConfigValidate(t *testing.T) {
 
 func TestPipelineConfigApplyDefaultsAndValidateSpec(t *testing.T) {
 	cfg := PipelineConfig{
-		Workers: Workers{Validation: 1, Transformation: 1},
-		Sources: []SourceConfig{{ID: "hw", Kind: SourceCSV, Path: "samples/input/hw_sample.csv"}},
+		Workers:         Workers{Validation: 1, Transformation: 1},
+		Sources:         []SourceConfig{{ID: "hw", Kind: SourceCSV, Path: "samples/input/hw_sample.csv"}},
 		Transformations: []TransformConfig{{Kind: TransformNormalize}},
 		Aggregations: []AggregationConfig{{
 			Kind: AggregationStats, GroupBy: "source", ValueField: "height",

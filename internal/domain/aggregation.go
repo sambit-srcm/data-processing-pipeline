@@ -22,9 +22,9 @@ func (a Aggregation) Average() (float64, bool) {
 
 // GlobalDailyReport combines all source kinds for one calendar day (UTC).
 type GlobalDailyReport struct {
-	JobID        JobID                `json:"job_id"`
-	Date         string               `json:"date"`
-	TotalRecords int64                `json:"total_records"`
+	JobID        JobID                 `json:"job_id"`
+	Date         string                `json:"date"`
+	TotalRecords int64                 `json:"total_records"`
 	Kinds        []GlobalDailyKindStat `json:"kinds"`
 }
 

@@ -19,6 +19,7 @@ type PipelineConfig struct {
 type TransformKind string
 
 const (
+	// TransformNormalize trims/uppercases source-specific fields.
 	TransformNormalize TransformKind = "normalize"
 )
 
@@ -31,7 +32,9 @@ type TransformConfig struct {
 type AggregationKind string
 
 const (
-	AggregationStats       AggregationKind = "stats"
+	// AggregationStats folds records into per-group count/sum/min/max.
+	AggregationStats AggregationKind = "stats"
+	// AggregationGlobalDaily builds a cross-source report for the run day.
 	AggregationGlobalDaily AggregationKind = "global_daily"
 )
 
@@ -92,38 +95,68 @@ func (c PipelineConfig) Validate() error {
 	if c.Workers.Validation < 1 || c.Workers.Transformation < 1 {
 		return errors.New("worker counts must be at least 1")
 	}
-	if c.Buffers.Records < 0 || c.Buffers.Validated < 0 || c.Buffers.Transformed < 0 || c.Buffers.Errors < 0 || c.Buffers.Progress < 0 {
-		return errors.New("buffer sizes must be zero or greater")
+	if err := c.Buffers.validate(); err != nil {
+		return err
 	}
 	if len(c.Sources) == 0 {
 		return errors.New("at least one source is required")
 	}
-	for _, t := range c.Transformations {
-		switch t.Kind {
-		case TransformNormalize:
-		default:
+	if err := validateTransforms(c.Transformations); err != nil {
+		return err
+	}
+	if err := validateAggregations(c.Aggregations); err != nil {
+		return err
+	}
+	return validateExports(c.Exports)
+}
+
+func (b Buffers) validate() error {
+	if b.Records < 0 || b.Validated < 0 || b.Transformed < 0 || b.Errors < 0 || b.Progress < 0 {
+		return errors.New("buffer sizes must be zero or greater")
+	}
+	return nil
+}
+
+func validateTransforms(items []TransformConfig) error {
+	for _, t := range items {
+		if t.Kind != TransformNormalize {
 			return fmt.Errorf("unsupported transform kind: %s", t.Kind)
 		}
 	}
-	for _, a := range c.Aggregations {
+	return nil
+}
+
+func validateAggregations(items []AggregationConfig) error {
+	for _, a := range items {
 		switch a.Kind {
 		case AggregationStats:
-			switch a.GroupBy {
-			case "", "auto", "source", "symbol":
-			default:
-				return fmt.Errorf("unsupported aggregation group_by: %s", a.GroupBy)
-			}
-			switch a.ValueField {
-			case "", "auto", "weight", "height", "price", "temp_c":
-			default:
-				return fmt.Errorf("unsupported aggregation value_field: %s", a.ValueField)
+			if err := validateStatsAggregation(a); err != nil {
+				return err
 			}
 		case AggregationGlobalDaily:
 		default:
 			return fmt.Errorf("unsupported aggregation kind: %s", a.Kind)
 		}
 	}
-	for _, e := range c.Exports {
+	return nil
+}
+
+func validateStatsAggregation(a AggregationConfig) error {
+	switch a.GroupBy {
+	case "", "auto", "source", "symbol":
+	default:
+		return fmt.Errorf("unsupported aggregation group_by: %s", a.GroupBy)
+	}
+	switch a.ValueField {
+	case "", "auto", "weight", "height", "price", "temp_c":
+	default:
+		return fmt.Errorf("unsupported aggregation value_field: %s", a.ValueField)
+	}
+	return nil
+}
+
+func validateExports(items []ExportConfig) error {
+	for _, e := range items {
 		if e.Path == "" {
 			return errors.New("export path is required")
 		}
