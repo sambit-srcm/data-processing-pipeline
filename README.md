@@ -8,6 +8,10 @@ Go service for the data processing pipeline.
 - golangci-lint v2.13 (`brew install golangci-lint` or the [install script](https://golangci-lint.run/docs/welcome/install/))
 - `goimports` (`go install golang.org/x/tools/cmd/goimports@latest`)
 
+## API
+
+OpenAPI 3 spec: [`docs/openapi.yaml`](docs/openapi.yaml)
+
 ## Commands
 
 | Command | What it does |
@@ -16,6 +20,7 @@ Go service for the data processing pipeline.
 | `make fmt` | Format with `gofmt` and `goimports` |
 | `make lint` | Run golangci-lint |
 | `make test` | Race-enabled tests with coverage |
+| `make test-integration` | End-to-end API/pipeline suite under `tests/integration` |
 | `make build` | Build `bin/dpp` |
 | `make ci` | tidy, lint, test, and build |
 

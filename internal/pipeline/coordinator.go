@@ -18,6 +18,7 @@ type Result struct {
 	Errors       []domain.PipelineError
 	Progress     domain.Progress
 	Aggregations []domain.Aggregation
+	GlobalDaily  []domain.GlobalDailyReport
 }
 
 // Coordinator runs validation and transformation pools.
@@ -26,53 +27,84 @@ type Coordinator struct {
 	Validator   validation.Validator       // nil means accept every record
 	Transformer transformation.Transformer // nil means pass-through
 	Aggregator  aggregation.Aggregator     // nil means skip aggregation
+	// OnProgress is called whenever a new progress snapshot is collected.
+	OnProgress func(domain.Progress)
 }
 
-// Run moves records through the stage channels and returns what came out.
+// Run moves preloaded records through the stage channels and returns what came out.
 func (c *Coordinator) Run(ctx context.Context, cfg domain.PipelineConfig, records []domain.Record) (Result, error) {
-	ch := newChannels(cfg.Buffers)
 	total := int64(len(records))
+	return c.run(ctx, cfg, &total, len(records), func(ctx context.Context, recordsCh chan<- domain.Record, _ chan<- domain.PipelineError) {
+		for _, rec := range records {
+			if !send(ctx, recordsCh, rec) {
+				return
+			}
+		}
+	})
+}
+
+// RunIngest starts ingestFn (which should fan-in onto recordsCh and may report errors), then runs the pipeline.
+func (c *Coordinator) RunIngest(ctx context.Context, cfg domain.PipelineConfig, ingestFn func(context.Context, chan<- domain.Record, chan<- domain.PipelineError)) (Result, error) {
+	return c.run(ctx, cfg, nil, 0, ingestFn)
+}
+
+func (c *Coordinator) run(
+	ctx context.Context,
+	cfg domain.PipelineConfig,
+	total *int64,
+	sizeHint int,
+	ingestFn func(context.Context, chan<- domain.Record, chan<- domain.PipelineError),
+) (Result, error) {
+	ch := newChannels(cfg.Buffers)
 	startedAt := time.Now().UTC()
 
 	var errMu sync.Mutex
 	var errs []domain.PipelineError
 	var progMu sync.Mutex
-	prog := domain.Progress{Total: &total, StartedAt: startedAt}
+	prog := domain.Progress{Total: total, StartedAt: startedAt}
 
 	var collectors sync.WaitGroup
 	collectors.Add(2)
 	go collectErrors(ch.errors, &errMu, &errs, &collectors)
-	go collectProgress(ch.progress, &progMu, &prog, &collectors)
+	go collectProgress(ch.progress, &progMu, &prog, c.OnProgress, &collectors)
 
 	var processed, valid, failed atomic.Int64
+	totalVal := int64(0)
+	if total != nil {
+		totalVal = *total
+	}
 
-	validateWG := c.startValidation(ctx, cfg.Workers.Validation, ch, total, startedAt, &processed, &valid, &failed)
+	validateWG := c.startValidation(ctx, cfg.Workers.Validation, ch, totalVal, total != nil, startedAt, &processed, &valid, &failed)
 	transformWG := c.startTransform(ctx, cfg.Workers.Transformation, ch)
 
 	go func() {
 		defer close(ch.results)
 		forward(ctx, ch.transformed, ch.results)
 	}()
-	go feed(ctx, ch.records, records)
+	// Ingest owns recordsCh: callers fan-in source goroutines here, then we close.
+	go func() {
+		defer close(ch.records)
+		ingestFn(ctx, ch.records, ch.errors)
+	}()
 
-	out := drain(ctx, ch.results, len(records))
+	// Fan-in: one consumer folds records into the aggregator as they arrive on resultsCh.
+	out, aggs, daily := c.fanInAggregate(ctx, ch, sizeHint)
 
 	validateWG.Wait()
 	transformWG.Wait()
-	finishProgress(ctx, ch, &progMu, &prog, &processed, &valid, &failed, total, startedAt)
+	finishTotal := totalVal
+	if total == nil {
+		finishTotal = processed.Load()
+	}
+	finishProgress(ctx, ch, &progMu, &prog, &processed, &valid, &failed, finishTotal, startedAt)
 
 	close(ch.errors)
 	close(ch.progress)
 	collectors.Wait()
 
-	aggs, err := c.aggregate(ctx, out)
-	if err != nil {
-		return Result{}, err
-	}
-
 	errMu.Lock()
 	progMu.Lock()
-	result := Result{Records: out, Errors: errs, Progress: prog, Aggregations: aggs}
+	result := Result{Records: out, Errors: errs, Progress: prog, Aggregations: aggs, GlobalDaily: daily}
 	progMu.Unlock()
 	errMu.Unlock()
 
@@ -91,12 +123,15 @@ func collectErrors(ch <-chan domain.PipelineError, mu *sync.Mutex, out *[]domain
 	}
 }
 
-func collectProgress(ch <-chan domain.Progress, mu *sync.Mutex, out *domain.Progress, wg *sync.WaitGroup) {
+func collectProgress(ch <-chan domain.Progress, mu *sync.Mutex, out *domain.Progress, onProgress func(domain.Progress), wg *sync.WaitGroup) {
 	defer wg.Done()
 	for p := range ch {
 		mu.Lock()
 		*out = p
 		mu.Unlock()
+		if onProgress != nil {
+			onProgress(p)
+		}
 	}
 }
 
@@ -105,6 +140,7 @@ func (c *Coordinator) startValidation(
 	workers int,
 	ch *channels,
 	total int64,
+	totalKnown bool,
 	startedAt time.Time,
 	processed, valid, failed *atomic.Int64,
 ) *sync.WaitGroup {
@@ -113,7 +149,7 @@ func (c *Coordinator) startValidation(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.validateLoop(ctx, ch, total, startedAt, processed, valid, failed)
+			c.validateLoop(ctx, ch, total, totalKnown, startedAt, processed, valid, failed)
 		}()
 	}
 	go func() {
@@ -127,6 +163,7 @@ func (c *Coordinator) validateLoop(
 	ctx context.Context,
 	ch *channels,
 	total int64,
+	totalKnown bool,
 	startedAt time.Time,
 	processed, valid, failed *atomic.Int64,
 ) {
@@ -161,7 +198,7 @@ func (c *Coordinator) validateLoop(
 						At:       time.Now().UTC(),
 					})
 					_ = send(ctx, ch.progress, domain.Progress{
-						Total:     &total,
+						Total:     progressTotal(total, totalKnown),
 						Processed: n,
 						Failed:    f,
 						Valid:     valid.Load(),
@@ -177,7 +214,7 @@ func (c *Coordinator) validateLoop(
 			n := processed.Add(1)
 			v := valid.Add(1)
 			_ = send(ctx, ch.progress, domain.Progress{
-				Total:     &total,
+				Total:     progressTotal(total, totalKnown),
 				Processed: n,
 				Valid:     v,
 				Failed:    failed.Load(),
@@ -185,6 +222,14 @@ func (c *Coordinator) validateLoop(
 			})
 		}
 	}
+}
+
+func progressTotal(total int64, known bool) *int64 {
+	if !known {
+		return nil
+	}
+	v := total
+	return &v
 }
 
 func (c *Coordinator) startTransform(ctx context.Context, workers int, ch *channels) *sync.WaitGroup {
@@ -234,42 +279,50 @@ func (c *Coordinator) transformLoop(ctx context.Context, ch *channels) {
 	}
 }
 
-func (c *Coordinator) aggregate(ctx context.Context, records []domain.Record) ([]domain.Aggregation, error) {
-	if c.Aggregator == nil || ctx.Err() != nil {
-		return nil, nil
-	}
-	for _, rec := range records {
-		if err := c.Aggregator.Add(ctx, rec); err != nil {
-			return nil, err
-		}
-	}
-	return c.Aggregator.Snapshot(ctx)
-}
-
-func feed(ctx context.Context, ch chan<- domain.Record, records []domain.Record) {
-	defer close(ch)
-	for _, rec := range records {
-		if !send(ctx, ch, rec) {
-			return
-		}
-	}
-}
-
-func drain(ctx context.Context, results <-chan domain.Record, sizeHint int) []domain.Record {
+// fanInAggregate consumes resultsCh, folding each record into the aggregator as it arrives.
+func (c *Coordinator) fanInAggregate(ctx context.Context, ch *channels, sizeHint int) ([]domain.Record, []domain.Aggregation, []domain.GlobalDailyReport) {
 	out := make([]domain.Record, 0, sizeHint)
 	for {
 		select {
 		case <-ctx.Done():
-			for range results {
+			for range ch.results {
 			}
-			return out
-		case rec, ok := <-results:
+			return out, c.snapshotAggregations(ctx), c.snapshotGlobalDaily()
+		case rec, ok := <-ch.results:
 			if !ok {
-				return out
+				return out, c.snapshotAggregations(ctx), c.snapshotGlobalDaily()
 			}
 			out = append(out, rec)
+			if c.Aggregator == nil {
+				continue
+			}
+			if err := c.Aggregator.Add(ctx, rec); err != nil {
+				_ = send(ctx, ch.errors, domain.PipelineError{
+					JobID:    rec.JobID,
+					SourceID: rec.SourceID,
+					RecordID: rec.ID,
+					Stage:    domain.StageAggregation,
+					Message:  err.Error(),
+					At:       time.Now().UTC(),
+				})
+			}
 		}
 	}
+}
+
+func (c *Coordinator) snapshotAggregations(ctx context.Context) []domain.Aggregation {
+	if c.Aggregator == nil {
+		return nil
+	}
+	aggs, err := c.Aggregator.Snapshot(ctx)
+	if err != nil {
+		return nil
+	}
+	return aggs
+}
+
+func (c *Coordinator) snapshotGlobalDaily() []domain.GlobalDailyReport {
+	return aggregation.ReportsOf(c.Aggregator)
 }
 
 func finishProgress(

@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +15,7 @@ func TestMetricsHandler(t *testing.T) {
 	ObserveHTTP(http.MethodGet, "/health", http.StatusOK, 5*time.Millisecond)
 	JobFinished("succeeded", 20*time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

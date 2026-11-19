@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
@@ -24,10 +25,15 @@ import (
 
 const defaultSleep = 50 * time.Millisecond
 
-// ArtifactStore saves pipeline outputs after a run.
+// ArtifactStore saves and loads pipeline outputs for a job.
 type ArtifactStore interface {
+	SaveProgress(ctx context.Context, id domain.JobID, p domain.Progress) error
+	GetProgress(ctx context.Context, id domain.JobID) (domain.Progress, error)
 	SaveErrors(ctx context.Context, errs []domain.PipelineError) error
+	ListErrors(ctx context.Context, id domain.JobID) ([]domain.PipelineError, error)
 	SaveAggregations(ctx context.Context, aggs []domain.Aggregation) error
+	ListAggregations(ctx context.Context, id domain.JobID) ([]domain.Aggregation, error)
+	DeleteJob(ctx context.Context, id domain.JobID) error
 }
 
 // Runner starts each job in a goroutine and supports cancellation.
@@ -37,8 +43,10 @@ type Runner struct {
 	Sleep time.Duration
 	// Weather fetches HTTP weather sources. Optional in tests.
 	Weather httpsources.Client
-	// Artifacts optionally persists errors and aggregations.
+	// Artifacts optionally persists progress, errors, and aggregations.
 	Artifacts ArtifactStore
+	// Progress is the live in-memory progress view used by the API.
+	Progress *ProgressHub
 
 	mu      sync.Mutex
 	cancels map[domain.JobID]context.CancelFunc
@@ -48,9 +56,10 @@ type Runner struct {
 // NewRunner returns a job runner.
 func NewRunner(jobs repository.JobRepository) *Runner {
 	return &Runner{
-		jobs:    jobs,
-		Sleep:   defaultSleep,
-		cancels: make(map[domain.JobID]context.CancelFunc),
+		jobs:     jobs,
+		Sleep:    defaultSleep,
+		Progress: NewProgressHub(),
+		cancels:  make(map[domain.JobID]context.CancelFunc),
 	}
 }
 
@@ -77,9 +86,8 @@ func (r *Runner) Start(job domain.Job) {
 			return
 		}
 
-		recs, sourceFails, err := r.loadRecords(ctx, job)
-		if err != nil {
-			slog.Error("load records", "id", job.ID, "err", err)
+		if len(job.Config.Sources) == 0 {
+			slog.Error("load records", "id", job.ID, "err", "no sources")
 			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
 			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
 			return
@@ -89,71 +97,158 @@ func (r *Runner) Start(job domain.Job) {
 		if sleep <= 0 {
 			sleep = defaultSleep
 		}
+		transformer, err := transformation.FromConfig(job.Config.Transformations)
+		if err != nil {
+			slog.Error("transform config", "id", job.ID, "err", err)
+			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
+			return
+		}
+		aggregator, err := aggregation.FromConfigs(job.Config.Aggregations...)
+		if err != nil {
+			slog.Error("aggregation config", "id", job.ID, "err", err)
+			_, _ = r.jobs.UpdateStatus(context.Background(), job.ID, domain.StatusFailed)
+			observability.JobFinished(string(domain.StatusFailed), time.Since(started))
+			return
+		}
 		coord := Coordinator{
 			Sleep:       sleep,
 			Validator:   validation.Router{},
-			Transformer: transformation.Normalize{},
-			Aggregator:  aggregation.NewMemory(),
+			Transformer: transformer,
+			Aggregator:  aggregator,
+			OnProgress: func(p domain.Progress) {
+				r.Progress.Set(job.ID, p)
+			},
 		}
-		result, err := coord.Run(ctx, job.Config, recs)
-		r.finish(ctx, job, sourceFails, result, err, started)
+
+		var sourceFails atomic.Int64
+		result, err := coord.RunIngest(ctx, job.Config, func(ctx context.Context, recordsCh chan<- domain.Record, errorsCh chan<- domain.PipelineError) {
+			r.ingestSources(ctx, job, recordsCh, errorsCh, &sourceFails)
+		})
+		fails := int(sourceFails.Load())
+		if err == nil && result.Progress.Processed == 0 && result.Progress.Failed == 0 && fails > 0 {
+			err = errors.New("no records loaded")
+		}
+		r.finish(ctx, job, fails, result, err, started)
 	}()
 }
 
 func (r *Runner) finish(ctx context.Context, job domain.Job, sourceFails int, result Result, runErr error, started time.Time) {
 	id := job.ID
-	status := domain.StatusSucceeded
-	switch {
-	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
-		status = domain.StatusCancelled
-	case runErr != nil:
-		status = domain.StatusFailed
-		slog.Error("job run", "id", id, "err", runErr)
-	case sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0):
-		status = domain.StatusPartial
-	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
-		status = domain.StatusFailed
-	}
+	status := finishStatus(ctx, id, sourceFails, result, runErr)
+	persistCtx := context.WithoutCancel(ctx)
 
-	if status == domain.StatusSucceeded || status == domain.StatusPartial {
-		if err := export.WriteAll(context.Background(), job.Config.Exports, result.Records, result.Aggregations); err != nil {
-			slog.Error("export", "id", id, "err", err)
-			status = domain.StatusFailed
-		}
-	}
+	exportDone := r.startExport(persistCtx, status, job, result)
+	r.Progress.Set(id, result.Progress)
+	r.saveArtifacts(persistCtx, id, result)
 
-	if r.Artifacts != nil {
-		if err := r.Artifacts.SaveErrors(context.Background(), result.Errors); err != nil {
-			slog.Error("save errors", "id", id, "err", err)
-		}
-		if err := r.Artifacts.SaveAggregations(context.Background(), result.Aggregations); err != nil {
-			slog.Error("save aggregations", "id", id, "err", err)
-		}
+	if err := <-exportDone; err != nil {
+		slog.Error("export", "id", id, "err", err)
+		status = domain.StatusFailed
 	}
 
 	observability.JobFinished(string(status), time.Since(started))
-
-	if _, err := r.jobs.UpdateStatus(context.Background(), id, status); err != nil {
+	if _, err := r.jobs.UpdateStatus(persistCtx, id, status); err != nil {
 		slog.Debug("job finish", "id", id, "err", err)
 	}
 }
 
-func (r *Runner) loadRecords(ctx context.Context, job domain.Job) ([]domain.Record, int, error) {
-	var out []domain.Record
-	fails := 0
-	for _, src := range job.Config.Sources {
-		recs, err := r.loadOne(ctx, job, src)
-		if err != nil {
-			slog.Error("source failed", "job", job.ID, "source", src.ID, "err", err)
-			fails++
-			continue
-		}
-		out = append(out, recs...)
+func finishStatus(ctx context.Context, id domain.JobID, sourceFails int, result Result, runErr error) domain.JobStatus {
+	switch {
+	case runErr != nil && (errors.Is(runErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)):
+		return domain.StatusCancelled
+	case runErr != nil:
+		slog.Error("job run", "id", id, "err", runErr)
+		return domain.StatusFailed
+	case sourceFails > 0 || (result.Progress.Failed > 0 && result.Progress.Valid > 0):
+		return domain.StatusPartial
+	case result.Progress.Valid == 0 && result.Progress.Failed > 0:
+		return domain.StatusFailed
+	default:
+		return domain.StatusSucceeded
 	}
-	if len(out) == 0 {
-		return nil, fails, errors.New("no records loaded")
+}
+
+func (r *Runner) startExport(ctx context.Context, status domain.JobStatus, job domain.Job, result Result) <-chan error {
+	done := make(chan error, 1)
+	if status != domain.StatusSucceeded && status != domain.StatusPartial {
+		close(done)
+		return done
 	}
-	return out, fails, nil
+	go func() {
+		done <- export.WriteAll(ctx, job.Config.Exports, result.Records, result.Aggregations, result.GlobalDaily)
+		close(done)
+	}()
+	return done
+}
+
+func (r *Runner) saveArtifacts(ctx context.Context, id domain.JobID, result Result) {
+	if r.Artifacts == nil {
+		return
+	}
+	if err := r.Artifacts.SaveProgress(ctx, id, result.Progress); err != nil {
+		slog.Error("save progress", "id", id, "err", err)
+	}
+	if err := r.Artifacts.SaveErrors(ctx, result.Errors); err != nil {
+		slog.Error("save errors", "id", id, "err", err)
+	}
+	if err := r.Artifacts.SaveAggregations(ctx, result.Aggregations); err != nil {
+		slog.Error("save aggregations", "id", id, "err", err)
+	}
+}
+
+// LatestProgress returns live progress when available.
+func (r *Runner) LatestProgress(id domain.JobID) (domain.Progress, bool) {
+	return r.Progress.Get(id)
+}
+
+// ClearProgress drops a job's live progress entry.
+func (r *Runner) ClearProgress(id domain.JobID) {
+	r.Progress.Delete(id)
+}
+
+// ingestSources loads each source in its own goroutine and fans records into recordsCh.
+// Source failures are reported on errorsCh as StageIngestion pipeline errors.
+func (r *Runner) ingestSources(ctx context.Context, job domain.Job, recordsCh chan<- domain.Record, errorsCh chan<- domain.PipelineError, sourceFails *atomic.Int64) {
+	sources := job.Config.Sources
+	var wg sync.WaitGroup
+	for _, src := range sources {
+		src := src
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ctx.Err(); err != nil {
+				sourceFails.Add(1)
+				_ = send(ctx, errorsCh, domain.PipelineError{
+					JobID:    job.ID,
+					SourceID: src.ID,
+					Stage:    domain.StageIngestion,
+					Message:  err.Error(),
+					At:       time.Now().UTC(),
+				})
+				return
+			}
+			recs, err := r.loadOne(ctx, job, src)
+			if err != nil {
+				slog.Error("source failed", "job", job.ID, "source", src.ID, "err", err)
+				sourceFails.Add(1)
+				_ = send(ctx, errorsCh, domain.PipelineError{
+					JobID:    job.ID,
+					SourceID: src.ID,
+					Stage:    domain.StageIngestion,
+					Message:  err.Error(),
+					At:       time.Now().UTC(),
+				})
+				return
+			}
+			for _, rec := range recs {
+				if !send(ctx, recordsCh, rec) {
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func (r *Runner) loadOne(ctx context.Context, job domain.Job, src domain.SourceConfig) ([]domain.Record, error) {

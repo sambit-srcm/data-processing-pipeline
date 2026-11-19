@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,7 +21,8 @@ func init() {
 func registerCollector(c prometheus.Collector) {
 	if err := prometheus.Register(c); err != nil {
 		// Safe if tests or another init already added the same collector.
-		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+		var alreadyRegistered prometheus.AlreadyRegisteredError
+		if !errors.As(err, &alreadyRegistered) {
 			panic(err)
 		}
 	}

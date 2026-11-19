@@ -35,7 +35,7 @@ func main() {
 
 	runner := pipeline.NewRunner(jobs)
 	runner.Artifacts = artifacts
-	srv := api.New(cfg.HTTPAddr, jobs, runner)
+	srv := api.New(cfg.HTTPAddr, jobs, runner, artifacts)
 	slog.Info("http server listening",
 		"addr", srv.Addr,
 		"postgres", cfg.DatabaseURL != "",
@@ -70,7 +70,7 @@ func main() {
 
 func newStores(cfg config.Config) (repository.JobRepository, pipeline.ArtifactStore, func(), error) {
 	if cfg.DatabaseURL == "" {
-		return memory.NewJobStore(), nil, func() {}, nil
+		return memory.NewJobStore(), memory.NewArtifactStore(), func() {}, nil
 	}
 	db, err := postgres.Open(cfg.DatabaseURL)
 	if err != nil {

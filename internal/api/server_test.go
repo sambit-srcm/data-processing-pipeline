@@ -30,6 +30,27 @@ func TestHealthAndReady(t *testing.T) {
 	}
 }
 
+func TestCreatePipelineAppliesSpecDefaults(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Close()
+
+	var job domain.Job
+	status := requestJSON(t, http.MethodPost, srv.URL+"/api/v1/pipelines", []byte(`{
+		"workers": {"validation": 1, "transformation": 1},
+		"buffers": {},
+		"sources": [{"id": "hw", "kind": "csv", "path": "samples/input/hw_sample.csv"}]
+	}`), &job)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d", status)
+	}
+	if len(job.Config.Transformations) != 1 || job.Config.Transformations[0].Kind != domain.TransformNormalize {
+		t.Fatalf("transformations = %+v", job.Config.Transformations)
+	}
+	if len(job.Config.Aggregations) != 1 || job.Config.Aggregations[0].Kind != domain.AggregationStats {
+		t.Fatalf("aggregations = %+v", job.Config.Aggregations)
+	}
+}
+
 func TestCreatePipeline(t *testing.T) {
 	srv := newTestServer(t)
 	job := createJob(t, srv)
@@ -165,10 +186,14 @@ type noopRunner struct{}
 
 func (noopRunner) Start(domain.Job)    {}
 func (noopRunner) Cancel(domain.JobID) {}
+func (noopRunner) LatestProgress(domain.JobID) (domain.Progress, bool) {
+	return domain.Progress{}, false
+}
+func (noopRunner) ClearProgress(domain.JobID) {}
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(Handler(memory.NewJobStore(), noopRunner{}))
+	srv := httptest.NewServer(Handler(memory.NewJobStore(), noopRunner{}, memory.NewArtifactStore()))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -176,8 +201,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 func newRunnerServer(t *testing.T) (*httptest.Server, *memory.JobStore, *pipeline.Runner) {
 	t.Helper()
 	store := memory.NewJobStore()
+	arts := memory.NewArtifactStore()
 	runner := pipeline.NewRunner(store)
-	srv := httptest.NewServer(Handler(store, runner))
+	runner.Artifacts = arts
+	srv := httptest.NewServer(Handler(store, runner, arts))
 	t.Cleanup(func() {
 		runner.Shutdown(context.Background())
 		srv.Close()
@@ -223,7 +250,9 @@ func validConfigJSON() []byte {
 	return []byte(`{
 		"workers": {"validation": 1, "transformation": 1},
 		"buffers": {},
-		"sources": [{"id": "hw", "kind": "csv", "path": "samples/input/hw_sample.csv"}]
+		"sources": [{"id": "hw", "kind": "csv", "path": "samples/input/hw_sample.csv"}],
+		"transformations": [{"kind": "normalize"}],
+		"aggregations": [{"kind": "stats", "group_by": "auto", "value_field": "weight"}]
 	}`)
 }
 

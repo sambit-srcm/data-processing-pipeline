@@ -17,7 +17,7 @@ import (
 
 func TestMiddlewareStatusCodes(t *testing.T) {
 	store := memory.NewJobStore()
-	srv := httptest.NewServer(Handler(store, noopRunner{}))
+	srv := httptest.NewServer(Handler(store, noopRunner{}, memory.NewArtifactStore()))
 	t.Cleanup(srv.Close)
 
 	assertStatus := func(t *testing.T, method, path string, body []byte, want int, dst any) {
@@ -52,7 +52,7 @@ func TestMiddlewareStatusCodes(t *testing.T) {
 	var missing ErrorBody
 	assertStatus(t, http.MethodGet, "/api/v1/pipelines/missing", nil, http.StatusNotFound, &missing)
 
-	srv500 := httptest.NewServer(Handler(errStore{createErr: errors.New("boom")}, noopRunner{}))
+	srv500 := httptest.NewServer(Handler(errStore{createErr: errors.New("boom")}, noopRunner{}, memory.NewArtifactStore()))
 	t.Cleanup(srv500.Close)
 	var internal ErrorBody
 	status, reqID := doJSON(t, http.MethodPost, srv500.URL+"/api/v1/pipelines", validConfigJSON(), &internal)

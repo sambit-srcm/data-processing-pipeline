@@ -56,3 +56,35 @@ func TestPipelineConfigValidate(t *testing.T) {
 		t.Fatal("expected an error with no sources")
 	}
 }
+
+func TestPipelineConfigApplyDefaultsAndValidateSpec(t *testing.T) {
+	cfg := PipelineConfig{
+		Workers:         Workers{Validation: 1, Transformation: 1},
+		Sources:         []SourceConfig{{ID: "hw", Kind: SourceCSV, Path: "samples/input/hw_sample.csv"}},
+		Transformations: []TransformConfig{{Kind: TransformNormalize}},
+		Aggregations: []AggregationConfig{{
+			Kind: AggregationStats, GroupBy: "source", ValueField: "height",
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := PipelineConfig{
+		Workers: Workers{Validation: 1, Transformation: 1},
+		Sources: []SourceConfig{{ID: "hw", Kind: SourceCSV, Path: "x.csv"}},
+	}
+	empty.ApplyDefaults()
+	if len(empty.Transformations) != 1 || empty.Transformations[0].Kind != TransformNormalize {
+		t.Fatalf("transformations defaults: %+v", empty.Transformations)
+	}
+	if len(empty.Aggregations) != 1 || empty.Aggregations[0].Kind != AggregationStats {
+		t.Fatalf("aggregations defaults: %+v", empty.Aggregations)
+	}
+
+	bad := cfg
+	bad.Transformations = []TransformConfig{{Kind: "nope"}}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("expected bad transform kind")
+	}
+}

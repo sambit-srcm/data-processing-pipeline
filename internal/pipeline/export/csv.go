@@ -12,14 +12,19 @@ import (
 	"github.com/sambit-srcm/data-processing-pipeline/internal/domain"
 )
 
-func writeCSV(path string, records []domain.Record, aggs []domain.Aggregation) error {
+func writeCSV(path string, records []domain.Record, aggs []domain.Aggregation, daily []domain.GlobalDailyReport) error {
 	if err := writeRecordCSV(path, records); err != nil {
 		return err
 	}
-	if len(aggs) == 0 {
+	if len(aggs) > 0 {
+		if err := writeAggCSV(aggPath(path), aggs); err != nil {
+			return err
+		}
+	}
+	if len(daily) == 0 {
 		return nil
 	}
-	return writeAggCSV(aggPath(path), aggs)
+	return writeGlobalDailyCSV(globalDailyPath(path), daily)
 }
 
 func writeRecordCSV(path string, records []domain.Record) error {
@@ -103,6 +108,37 @@ func writeAggCSV(path string, aggs []domain.Aggregation) error {
 	return w.Error()
 }
 
+func writeGlobalDailyCSV(path string, reports []domain.GlobalDailyReport) error {
+	f, err := os.Create(path) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{"job_id", "date", "kind", "count", "sum", "min", "max", "total_records"}); err != nil {
+		return err
+	}
+	for _, rep := range reports {
+		for _, k := range rep.Kinds {
+			if err := w.Write([]string{
+				string(rep.JobID),
+				rep.Date,
+				string(k.Kind),
+				strconv.FormatInt(k.Count, 10),
+				formatFloat(k.Sum),
+				formatFloat(k.Min),
+				formatFloat(k.Max),
+				strconv.FormatInt(rep.TotalRecords, 10),
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
 func aggPath(path string) string {
 	ext := filepath.Ext(path)
 	base := strings.TrimSuffix(path, ext)
@@ -110,6 +146,15 @@ func aggPath(path string) string {
 		return path + ".aggs.csv"
 	}
 	return base + ".aggs" + ext
+}
+
+func globalDailyPath(path string) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	if ext == "" {
+		return path + ".global_daily.csv"
+	}
+	return base + ".global_daily" + ext
 }
 
 func formatFloat(v float64) string {
